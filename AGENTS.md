@@ -88,6 +88,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | mpdm channel name → human name | `slackfmt.FormatMPDMName` |
 | Slack permalink parsing | `slackurl.Parse` |
 | Emoji shortcode → glyph | `emoji.Sprint`, `emoji.CodeMap`, `emoji.StripSkinTone` |
+| Does Block Kit already render the message body? | `blockkit.RendersBody(blocks)`, `messages.BlocksCarryBody(msg)` |
 | Usergroup map helpers | `usergroups.Copy`, `usergroups.Equal`, `usergroups.Display` |
 
 ### UI chrome

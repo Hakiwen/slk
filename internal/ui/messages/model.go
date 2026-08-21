@@ -591,6 +591,20 @@ func MessageTextSource(msg MessageItem) string {
 	return msg.Text
 }
 
+// BlocksCarryBody reports whether msg's blocks already render its body,
+// in which case the host adds no row for msg.Text. A non-empty rich_text
+// block is the exception: it renders through MessageTextSource and must
+// retain the host body row. This decision affects rendering only;
+// copying still uses msg.Text.
+func BlocksCarryBody(msg MessageItem) bool {
+	for _, b := range msg.Blocks {
+		if rt, ok := b.(blockkit.RichTextBlock); ok && blockkit.RichTextToMrkdwn(rt) != "" {
+			return false
+		}
+	}
+	return blockkit.RendersBody(msg.Blocks)
+}
+
 // dirty bumps the render-version counter.
 func (m *Model) dirty() { m.version++ }
 
@@ -1965,7 +1979,14 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		EmojiFlushes: &flushes,
 		Width:        contentWidth,
 	}
-	rendered := RenderSlackMarkdownWith(MessageTextSource(msg), bodyOpts)
+	// Blocks that render the body suppress Slack's notification-fallback
+	// text and its row. See BlocksCarryBody.
+	hasBody := !BlocksCarryBody(msg)
+	bodySrc := MessageTextSource(msg)
+	if !hasBody {
+		bodySrc = ""
+	}
+	rendered := RenderSlackMarkdownWith(bodySrc, bodyOpts)
 	if len(m.searchTerms) > 0 {
 		// SearchHighlightSGR's close sequence restores the theme bg/fg
 		// after the highlight's reset so plain body text doesn't bleed
@@ -2149,7 +2170,8 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 	//
 	//   row 0: broadcastLabel (only when subtype=thread_broadcast)
 	//   row 0|1: username line + editedMark
-	//   row N: wrapped body text (lipgloss.Height of styled `text`)
+	//   row N: wrapped body text (lipgloss.Height of styled `text`);
+	//          absent when BlocksCarryBody
 	//
 	// Attachments begin immediately after the body text.
 	var broadcastLabel string
@@ -2158,8 +2180,10 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		broadcastLabel = styles.Timestamp.Render("\u21b3 replied to a thread") + "\n"
 		preAttachmentRows++ // the broadcast label occupies its own row
 	}
-	preAttachmentRows++                        // username + ts row
-	preAttachmentRows += lipgloss.Height(text) // wrapped body text
+	preAttachmentRows++ // username + ts row
+	if hasBody {
+		preAttachmentRows += lipgloss.Height(text) // wrapped body text
+	}
 
 	// contentColBase is the display column at which message content
 	// begins inside the cached entry's linesNormal. buildCache wraps
@@ -2346,7 +2370,11 @@ func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string,
 		attachmentLineCount = len(flat)
 	}
 
-	msgContent := broadcastLabel + line + editedMark + "\n" + text + bkBlock + attachmentLines + threadLine + reactionLine
+	bodyRow := ""
+	if hasBody {
+		bodyRow = "\n" + text
+	}
+	msgContent := broadcastLabel + line + editedMark + bodyRow + bkBlock + attachmentLines + threadLine + reactionLine
 
 	// Translate per-pill specs into entry-relative reaction hit rects.
 	// reactionRowBase is the row index (within linesNormal) where the
