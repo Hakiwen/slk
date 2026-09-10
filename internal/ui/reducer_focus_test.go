@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 )
@@ -86,14 +87,14 @@ func markCapture(t *testing.T) (*App, *[]string) {
 	app.inTmux = false
 	app.markFlushDebounce = time.Millisecond
 	calls := &[]string{}
-	app.SetChannelService(NewChannelService(ChannelServiceFuncs{
-		MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+	setChannelFuncsForTest(app, core.ChannelServiceFuncs{
+		MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 			*calls = append(*calls, "ch:"+string(channelID)+"/"+string(ts))
 			return nil
 		},
-	}))
-	app.SetThreadService(NewThreadService(ThreadServiceFuncs{
-		Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd {
+	})
+	app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+		Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) core.Cmd {
 			*calls = append(*calls, "th:"+string(channelID)+"/"+string(threadTS)+"/"+string(ts))
 			// A non-nil cmd, as the production adapter returns for any
 			// mark it will actually issue. Returning nil here made
@@ -101,7 +102,7 @@ func markCapture(t *testing.T) (*App, *[]string) {
 			// its selfThreadMarks.record was unreachable from every
 			// test in this file and could be deleted without failing
 			// one. The cmd itself yields what the real one yields.
-			return func() tea.Msg {
+			return func() core.Msg {
 				return ThreadMarkedLocalMsg{
 					ChannelID: string(channelID),
 					ThreadTS:  string(threadTS),
@@ -832,16 +833,16 @@ func TestEntryMarkEcho_LeavesDividerInPlace(t *testing.T) {
 		{TS: "5.000000", UserID: "U2"},
 	}
 	calls := &[]string{}
-	app.SetChannelService(NewChannelService(ChannelServiceFuncs{
+	setChannelFuncsForTest(app, core.ChannelServiceFuncs{
 		ReadCache: func(ids.ChannelID) []messages.MessageItem { return cached },
 		// syncedAt within cacheFreshThreshold selects tier 1, the
 		// branch that marks read without fetching.
 		SyncedAt: func(ids.ChannelID) int64 { return time.Now().Unix() },
-		MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+		MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 			*calls = append(*calls, "ch:"+string(channelID)+"/"+string(ts))
 			return nil
 		},
-	}))
+	})
 
 	_, cmd := app.Update(ChannelSelectedMsg{ID: "C1", Name: "general"})
 	feed(t, app, cmd, 0)
@@ -1011,8 +1012,8 @@ func threadsDirtyCapture(t *testing.T) (*App, *int) {
 	app.activeTeamID = "T1"
 	app.threadsDirtyDebounce = time.Millisecond
 	fetches := new(int)
-	app.SetThreadService(NewThreadService(ThreadServiceFuncs{
-		ListFetch: func(ids.TeamID) tea.Msg {
+	app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+		ListFetch: func(ids.TeamID) core.Msg {
 			*fetches++
 			return nil
 		},

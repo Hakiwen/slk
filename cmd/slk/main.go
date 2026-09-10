@@ -24,6 +24,7 @@ import (
 	"github.com/gammons/slk/internal/bootstrap"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	emojiwidth "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/filedl"
@@ -1413,7 +1414,7 @@ func run() error {
 			return railUnreadWorkspaces(unread, router.ByID)
 		})
 
-		app.SetChannelService(ui.NewChannelService(ui.ChannelServiceFuncs{
+		app.SetChannelService(core.NewChannelService(core.ChannelServiceFuncs{
 			RecordVisit: func(channelID ids.ChannelID) {
 				chIDStr := string(channelID)
 				wctx := router.Active()
@@ -1487,10 +1488,10 @@ func run() error {
 				// off the Update goroutine.
 				wctx.Membership.EnsureFresh(context.Background(), string(channelID))
 			},
-			OpenConversation: func(userIDs []string, requestID uint64) tea.Cmd {
+			OpenConversation: func(userIDs []string, requestID uint64) core.Cmd {
 				wctx := router.Active()
 				if wctx == nil {
-					return func() tea.Msg {
+					return func() core.Msg {
 						return ui.NewMessageFailedMsg{
 							RequestID: requestID,
 							Err:       fmt.Errorf("no active workspace"),
@@ -1498,7 +1499,7 @@ func run() error {
 					}
 				}
 				client := wctx.Client
-				return func() tea.Msg {
+				return func() core.Msg {
 					channelID, alreadyOpen, err := client.OpenConversation(ctx, userIDs)
 					if err != nil {
 						return ui.NewMessageFailedMsg{
@@ -1514,7 +1515,7 @@ func run() error {
 					}
 				}
 			},
-			Fetch: func(channelID ids.ChannelID, channelName string) tea.Msg {
+			Fetch: func(channelID ids.ChannelID, channelName string) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil || wctx.Client == nil {
@@ -1542,7 +1543,7 @@ func run() error {
 					MarkedTS: markedTS,
 				}
 			},
-			MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+			MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 				wctx := router.Active()
 				if wctx == nil || wctx.Client == nil {
 					return nil
@@ -1550,7 +1551,7 @@ func run() error {
 				markChannelReadAsync(ctx, wctx.Client, db, p, string(channelID), string(ts))
 				return nil // ChannelMarkedReadMsg is emitted from inside the goroutine
 			},
-			FetchOlder: func(channelID ids.ChannelID, oldestTS ids.MessageTS) tea.Msg {
+			FetchOlder: func(channelID ids.ChannelID, oldestTS ids.MessageTS) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1563,7 +1564,7 @@ func run() error {
 					Messages:  msgItems,
 				}
 			},
-			FetchAround: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+			FetchAround: func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1575,7 +1576,7 @@ func run() error {
 				}
 				return ui.MessagesAroundLoadedMsg{ChannelID: chIDStr, TargetTS: string(ts), Messages: msgItems}
 			},
-			Join: func(channelID ids.ChannelID, channelName string) tea.Msg {
+			Join: func(channelID ids.ChannelID, channelName string) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1589,8 +1590,8 @@ func run() error {
 			},
 		}))
 
-		app.SetSearchService(ui.NewSearchService(ui.SearchServiceFuncs{
-			SearchChannel: func(channelID ids.ChannelID, query string) tea.Msg {
+		app.SetSearchService(core.NewSearchService(core.SearchServiceFuncs{
+			SearchChannel: func(channelID ids.ChannelID, query string) core.Msg {
 				wctx := router.Active()
 				if wctx == nil {
 					// Returning nil would leave the `/query  …` spinner
@@ -1614,8 +1615,8 @@ func run() error {
 			SearchWorkspace: searchWorkspaceFunc(router, db, tsFormat),
 		}))
 
-		app.SetMessageService(ui.NewMessageService(ui.MessageServiceFuncs{
-			Send: func(channelID ids.ChannelID, text string) tea.Msg {
+		app.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
+			Send: func(channelID ids.ChannelID, text string) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1644,7 +1645,7 @@ func run() error {
 					},
 				}
 			},
-			Edit: func(channelID ids.ChannelID, ts ids.MessageTS, text string) tea.Msg {
+			Edit: func(channelID ids.ChannelID, ts ids.MessageTS, text string) core.Msg {
 				chIDStr, tsStr := string(channelID), string(ts)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1662,7 +1663,7 @@ func run() error {
 				}
 				return ui.MessageEditedMsg{ChannelID: chIDStr, TS: tsStr, Err: err}
 			},
-			Delete: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+			Delete: func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 				chIDStr, tsStr := string(channelID), string(ts)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1676,7 +1677,7 @@ func run() error {
 				}
 				return ui.MessageDeletedMsg{ChannelID: chIDStr, TS: tsStr, Err: err}
 			},
-			MarkUnread: func(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) tea.Msg {
+			MarkUnread: func(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) core.Msg {
 				chIDStr := string(channelID)
 				threadTSStr := string(threadTS)
 				boundaryTSStr := string(boundaryTS)
@@ -1793,8 +1794,8 @@ func run() error {
 			}
 		})
 
-		app.SetThreadService(ui.NewThreadService(ui.ThreadServiceFuncs{
-			Fetch: func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+		app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+			Fetch: func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 				chIDStr, threadTSStr := string(channelID), string(threadTS)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1813,7 +1814,7 @@ func run() error {
 				}
 				return loadCachedThreadReplies(db, wctx.Client.UserID(), string(channelID), string(threadTS), wctx.UserNames, tsFormat, router)
 			},
-			Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd {
+			Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) core.Cmd {
 				chIDStr, threadTSStr, tsStr := string(channelID), string(threadTS), string(ts)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1821,7 +1822,7 @@ func run() error {
 				}
 				client := wctx.Client
 				teamID := wctx.TeamID
-				return func() tea.Msg {
+				return func() core.Msg {
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					defer cancel()
 					// markThreadRead persists the cursor only after
@@ -1837,7 +1838,7 @@ func run() error {
 					}
 				}
 			},
-			SendReply: func(channelID ids.ChannelID, threadTS ids.ThreadTS, text string, broadcast bool) tea.Msg {
+			SendReply: func(channelID ids.ChannelID, threadTS ids.ThreadTS, text string, broadcast bool) core.Msg {
 				chIDStr, threadTSStr := string(channelID), string(threadTS)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1878,7 +1879,7 @@ func run() error {
 					},
 				}
 			},
-			ListFetch: func(teamID ids.TeamID) tea.Msg {
+			ListFetch: func(teamID ids.TeamID) core.Msg {
 				teamIDStr := string(teamID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1936,7 +1937,7 @@ func run() error {
 			},
 		}))
 
-		app.SetReactionService(ui.NewReactionService(
+		app.SetReactionService(core.NewReactionService(
 			func(channelID ids.ChannelID, messageTS ids.MessageTS, emojiName string) error {
 				wctx := router.Active()
 				if wctx == nil {
@@ -3854,8 +3855,8 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 // workspace. Always returns a WorkspaceSearchResultsMsg — a nil msg
 // would leave the ctrl+f modal spinner stuck (the reducer only exits
 // the loading state on a results msg).
-func searchWorkspaceFunc(router *workspaceRouter, db *cache.DB, tsFormat string) func(query string) tea.Msg {
-	return func(query string) tea.Msg {
+func searchWorkspaceFunc(router *workspaceRouter, db *cache.DB, tsFormat string) func(query string) core.Msg {
+	return func(query string) core.Msg {
 		wctx := router.Active()
 		if wctx == nil {
 			return ui.WorkspaceSearchResultsMsg{Query: query, Err: errors.New("no active workspace")}

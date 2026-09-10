@@ -15,6 +15,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/compose"
@@ -763,7 +764,7 @@ func TestApp_ClickOnThreadInThreadsViewOpensIt(t *testing.T) {
 
 	fetchedCh := ""
 	fetchedTS := ""
-	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 		fetchedCh = string(channelID)
 		fetchedTS = string(threadTS)
 		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: nil}
@@ -825,7 +826,7 @@ func TestApp_HandleEnterInThreadsViewOpensSelectedThread(t *testing.T) {
 
 	fetchedCh := ""
 	fetchedTS := ""
-	app.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+	app.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 		fetchedCh = string(channelID)
 		fetchedTS = string(threadTS)
 		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: nil}
@@ -889,7 +890,7 @@ func TestApp_OpenSelectedThreadDedups(t *testing.T) {
 	app := NewApp()
 	app.activeTeamID = "T1"
 	fetched := 0
-	app.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+	app.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 		fetched++
 		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: nil}
 	})
@@ -959,7 +960,7 @@ func TestApp_NewThreadReplyTriggersDirtyMsg(t *testing.T) {
 	app.threadsDirtyDebounce = 5 * time.Millisecond
 
 	fetched := make(chan string, 4)
-	app.setThreadsListFetcherForTest(func(teamID ids.TeamID) tea.Msg {
+	app.setThreadsListFetcherForTest(func(teamID ids.TeamID) core.Msg {
 		fetched <- string(teamID)
 		return ThreadsListLoadedMsg{TeamID: string(teamID), Summaries: nil}
 	})
@@ -1020,7 +1021,7 @@ func TestApp_NewMessageWithoutThreadTSDoesNotTriggerDirty(t *testing.T) {
 	app.threadsDirtyDebounce = 5 * time.Millisecond
 
 	fetched := make(chan struct{}, 4)
-	app.setThreadsListFetcherForTest(func(teamID ids.TeamID) tea.Msg {
+	app.setThreadsListFetcherForTest(func(teamID ids.TeamID) core.Msg {
 		fetched <- struct{}{}
 		return ThreadsListLoadedMsg{TeamID: string(teamID), Summaries: nil}
 	})
@@ -1056,7 +1057,7 @@ func TestApp_NewMessageWithoutThreadTSDoesNotTriggerDirty(t *testing.T) {
 func TestApp_WorkspaceReadyTriggersThreadsListFetch(t *testing.T) {
 	app := NewApp()
 	fetched := make(chan string, 1)
-	app.setThreadsListFetcherForTest(func(teamID ids.TeamID) tea.Msg {
+	app.setThreadsListFetcherForTest(func(teamID ids.TeamID) core.Msg {
 		fetched <- string(teamID)
 		return ThreadsListLoadedMsg{TeamID: string(teamID), Summaries: nil}
 	})
@@ -1113,7 +1114,7 @@ func TestApp_InsertInThreadsViewFocusesThreadCompose(t *testing.T) {
 
 func TestApp_BackgroundWorkspaceReadyDoesNotClobberActiveState(t *testing.T) {
 	app := NewApp()
-	app.setThreadsListFetcherForTest(func(teamID ids.TeamID) tea.Msg {
+	app.setThreadsListFetcherForTest(func(teamID ids.TeamID) core.Msg {
 		return ThreadsListLoadedMsg{TeamID: string(teamID), Summaries: nil}
 	})
 
@@ -1166,7 +1167,7 @@ func TestApp_WorkspaceSwitchedTriggersThreadsListFetchAndSelectsThreadsRow(t *te
 	}
 
 	fetched := make(chan string, 1)
-	app.setThreadsListFetcherForTest(func(teamID ids.TeamID) tea.Msg {
+	app.setThreadsListFetcherForTest(func(teamID ids.TeamID) core.Msg {
 		fetched <- string(teamID)
 		return ThreadsListLoadedMsg{TeamID: string(teamID), Summaries: nil}
 	})
@@ -3076,10 +3077,10 @@ func threadPanelOnR1R2(t *testing.T) *App {
 func issueThreadMarkOnOpen(t *testing.T, app *App) ThreadMarkedLocalMsg {
 	t.Helper()
 	var marked []string
-	app.SetThreadService(NewThreadService(ThreadServiceFuncs{
-		Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd {
+	app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+		Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) core.Cmd {
 			marked = append(marked, string(channelID)+"/"+string(threadTS)+"/"+string(ts))
-			return func() tea.Msg {
+			return func() core.Msg {
 				return ThreadMarkedLocalMsg{
 					ChannelID: string(channelID),
 					ThreadTS:  string(threadTS),
@@ -3515,7 +3516,7 @@ func TestChannelSelectedRendersFromCacheWithoutSpinner(t *testing.T) {
 	// ago is >30s (not Tier 1) and <5min (not Tier 3).
 	app.setChannelSyncedAtReaderForTest(func(ids.ChannelID) int64 { return time.Now().Unix() - 120 })
 	fetcherCalled := false
-	app.setChannelFetcherForTest(func(channelID ids.ChannelID, channelName string) tea.Msg {
+	app.setChannelFetcherForTest(func(channelID ids.ChannelID, channelName string) core.Msg {
 		fetcherCalled = true
 		return MessagesLoadedMsg{ChannelID: string(channelID), Messages: nil}
 	})
@@ -3560,7 +3561,7 @@ func TestMessagesLoadedNilDoesNotClobberCachedView(t *testing.T) {
 	// Tier 2: cache renders + fetcher fires (the network failure path
 	// under test happens after both).
 	app.setChannelSyncedAtReaderForTest(func(ids.ChannelID) int64 { return time.Now().Unix() - 120 })
-	app.setChannelFetcherForTest(func(channelID ids.ChannelID, channelName string) tea.Msg {
+	app.setChannelFetcherForTest(func(channelID ids.ChannelID, channelName string) core.Msg {
 		// Simulate a network failure by returning the same shape the
 		// real fetcher uses on error.
 		return MessagesLoadedMsg{ChannelID: string(channelID), Messages: nil}
@@ -3602,7 +3603,7 @@ func TestMessagesLoadedEmptyClearsView(t *testing.T) {
 		{TS: "1.0", UserID: "U1", UserName: "alice", Text: "stale cache"},
 	}
 	app.setChannelCacheReaderForTest(func(channelID ids.ChannelID) []messages.MessageItem { return cachedItems })
-	app.setChannelFetcherForTest(func(channelID ids.ChannelID, channelName string) tea.Msg {
+	app.setChannelFetcherForTest(func(channelID ids.ChannelID, channelName string) core.Msg {
 		return MessagesLoadedMsg{ChannelID: string(channelID), Messages: []messages.MessageItem{}}
 	})
 	app.activeChannelID = "C1"
@@ -3623,7 +3624,7 @@ func TestMessagesLoadedEmptyClearsView(t *testing.T) {
 func TestChannelSelectedFallsBackToSpinnerOnCacheMiss(t *testing.T) {
 	app := NewApp()
 	app.setChannelCacheReaderForTest(func(channelID ids.ChannelID) []messages.MessageItem { return nil })
-	app.setChannelFetcherForTest(func(channelID ids.ChannelID, channelName string) tea.Msg {
+	app.setChannelFetcherForTest(func(channelID ids.ChannelID, channelName string) core.Msg {
 		return MessagesLoadedMsg{ChannelID: string(channelID), Messages: nil}
 	})
 
@@ -3643,7 +3644,7 @@ func TestChannelSelectedFallsBackToSpinnerOnCacheMiss(t *testing.T) {
 func TestWorkspaceSwitchedQueuesChannelSelected(t *testing.T) {
 	app := NewApp()
 	app.setChannelCacheReaderForTest(func(channelID ids.ChannelID) []messages.MessageItem { return nil })
-	app.setChannelFetcherForTest(func(channelID ids.ChannelID, channelName string) tea.Msg {
+	app.setChannelFetcherForTest(func(channelID ids.ChannelID, channelName string) core.Msg {
 		return MessagesLoadedMsg{ChannelID: string(channelID), Messages: nil}
 	})
 
@@ -3707,7 +3708,7 @@ func TestWorkspaceSwitchedEmptyClearsPane(t *testing.T) {
 func TestWorkspaceReadyFirstChannelSetsLoading(t *testing.T) {
 	app := NewApp()
 	app.setChannelCacheReaderForTest(func(channelID ids.ChannelID) []messages.MessageItem { return nil })
-	app.setChannelFetcherForTest(func(channelID ids.ChannelID, channelName string) tea.Msg {
+	app.setChannelFetcherForTest(func(channelID ids.ChannelID, channelName string) core.Msg {
 		return MessagesLoadedMsg{ChannelID: string(channelID), Messages: nil}
 	})
 
@@ -4246,12 +4247,12 @@ func TestChannelSelected_Tier1_RenderCacheNoFetch(t *testing.T) {
 		return []messages.MessageItem{{TS: "1.0", UserID: "U", UserName: "u", Text: "hi"}}
 	})
 	fetchCalled := 0
-	app.setChannelFetcherForTest(func(id ids.ChannelID, name string) tea.Msg {
+	app.setChannelFetcherForTest(func(id ids.ChannelID, name string) core.Msg {
 		fetchCalled++
 		return MessagesLoadedMsg{ChannelID: string(id), Messages: nil}
 	})
 	markCalled := 0
-	app.setChannelReadMarkerForTest(func(id ids.ChannelID, ts ids.MessageTS) tea.Msg {
+	app.setChannelReadMarkerForTest(func(id ids.ChannelID, ts ids.MessageTS) core.Msg {
 		markCalled++
 		return nil
 	})
@@ -4275,12 +4276,12 @@ func TestChannelSelected_Tier2_CacheAndFetch(t *testing.T) {
 		return []messages.MessageItem{{TS: "1.0", UserID: "U", UserName: "u", Text: "hi"}}
 	})
 	fetchCalled := 0
-	app.setChannelFetcherForTest(func(id ids.ChannelID, name string) tea.Msg {
+	app.setChannelFetcherForTest(func(id ids.ChannelID, name string) core.Msg {
 		fetchCalled++
 		return MessagesLoadedMsg{ChannelID: string(id), Messages: nil}
 	})
 	markCalled := 0
-	app.setChannelReadMarkerForTest(func(id ids.ChannelID, ts ids.MessageTS) tea.Msg {
+	app.setChannelReadMarkerForTest(func(id ids.ChannelID, ts ids.MessageTS) core.Msg {
 		markCalled++
 		return nil
 	})
@@ -4303,7 +4304,7 @@ func TestChannelSelected_Tier3_SpinnerOnly(t *testing.T) {
 		return nil // no cache at all → genuine Tier 3
 	})
 	fetchCalled := 0
-	app.setChannelFetcherForTest(func(id ids.ChannelID, name string) tea.Msg {
+	app.setChannelFetcherForTest(func(id ids.ChannelID, name string) core.Msg {
 		fetchCalled++
 		return MessagesLoadedMsg{ChannelID: string(id), Messages: nil}
 	})
@@ -4330,7 +4331,7 @@ func TestChannelSelected_UnknownFreshnessWithCache_FallsToTier2(t *testing.T) {
 		return []messages.MessageItem{{TS: "1.0", UserID: "U", UserName: "u", Text: "hi"}}
 	})
 	fetchCalled := 0
-	app.setChannelFetcherForTest(func(id ids.ChannelID, name string) tea.Msg {
+	app.setChannelFetcherForTest(func(id ids.ChannelID, name string) core.Msg {
 		fetchCalled++
 		return MessagesLoadedMsg{ChannelID: string(id), Messages: nil}
 	})
@@ -4691,7 +4692,7 @@ func TestListReactionsNoOpWhenNoReactions(t *testing.T) {
 func TestOpenThreadPanel_BoundaryUsesThreadCursor(t *testing.T) {
 	app := NewApp()
 	var gotChannel, gotThread string
-	app.SetThreadService(NewThreadService(ThreadServiceFuncs{
+	app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
 		ThreadLastRead: func(channelID ids.ChannelID, threadTS ids.ThreadTS) string {
 			gotChannel, gotThread = string(channelID), string(threadTS)
 			return "R7"

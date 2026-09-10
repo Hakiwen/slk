@@ -192,12 +192,12 @@ type App struct {
 	// channels API + local cache + session bookkeeping). See
 	// internal/ui/services.go. Defaulted to a no-op adapter in
 	// NewApp so call sites can dispatch without nil-checks.
-	channels ChannelService
+	channels core.ChannelService
 	// messages is the App's MessageService collaborator (send / edit /
 	// delete / mark-unread / permalink). See internal/ui/services.go.
 	// Defaulted to a no-op adapter in NewApp so call sites can dispatch
 	// without nil-checks.
-	messageSvc MessageService
+	messageSvc core.MessageService
 
 	uploader UploadFunc
 
@@ -228,7 +228,7 @@ type App struct {
 	// unread boundary). See internal/ui/services.go. Defaulted to a
 	// no-op adapter in NewApp so call sites can dispatch without
 	// nil-checks.
-	threads ThreadService
+	threads core.ThreadService
 
 	threadsDirtyDebounce time.Duration
 
@@ -408,7 +408,7 @@ type App struct {
 	// reactions on Slack + load/record frecent emoji history). See
 	// internal/ui/services.go. Defaulted to a no-op adapter in NewApp
 	// so call sites can dispatch without nil-checks.
-	reactions     ReactionService
+	reactions     core.ReactionService
 	currentUserID string
 
 	// editing tracks in-progress message edit state. See
@@ -457,7 +457,7 @@ type App struct {
 	search      *activeSearch
 	searchInput string
 	searchGen   uint64
-	searchSvc   SearchService
+	searchSvc   core.SearchService
 
 	// browserOpener launches a URL in the OS browser. Defaults to
 	// openURLCmd; tests inject fakes.
@@ -2279,11 +2279,11 @@ func (a *App) flushPendingMarks() tea.Cmd {
 	}
 	if pt := a.pendingThreadMark; pt.ts != "" {
 		a.pendingThreadMark = pendingThreadMarkState{}
-		if c := a.threads.Mark(
+		if c := teaCmd(a.threads.Mark(
 			ids.ChannelID(pt.channelID),
 			ids.ThreadTS(pt.threadTS),
 			ids.MessageTS(pt.ts),
-		); c != nil {
+		)); c != nil {
 			// Recorded before the cmd runs, symmetrically with the
 			// channel leg above: Mark only builds the cmd, so the mark
 			// has not been issued yet and this record cannot lose the
@@ -2390,7 +2390,7 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 // SetChannelService wires the App's ChannelService collaborator
 // (Slack channels API + local cache + session bookkeeping). Build
 // one via NewChannelService from a ChannelServiceFuncs bundle.
-func (a *App) SetChannelService(s ChannelService) {
+func (a *App) SetChannelService(s core.ChannelService) {
 	if s == nil {
 		s = noopChannelService
 	}
@@ -2399,7 +2399,7 @@ func (a *App) SetChannelService(s ChannelService) {
 
 // SetSearchService injects the search backend (wired by cmd/slk).
 // Build one via NewSearchService from a SearchServiceFuncs bundle.
-func (a *App) SetSearchService(s SearchService) {
+func (a *App) SetSearchService(s core.SearchService) {
 	if s == nil {
 		s = noopSearchService
 	}
@@ -2423,7 +2423,7 @@ func (a *App) clearActiveSearch() {
 // SetMessageService wires the App's MessageService collaborator
 // (send / edit / delete / mark-unread / permalink). Build one via
 // NewMessageService from a MessageServiceFuncs bundle.
-func (a *App) SetMessageService(s MessageService) {
+func (a *App) SetMessageService(s core.MessageService) {
 	if s == nil {
 		s = noopMessageService
 	}
@@ -2472,7 +2472,7 @@ func (a *App) SetClipboardWriter(fn clipboardWriter) {
 // SetThreadService wires the App's ThreadService collaborator
 // (fetch / mark / reply / list-fetch + parent-channel last-read).
 // Build one via NewThreadService from a ThreadServiceFuncs bundle.
-func (a *App) SetThreadService(s ThreadService) {
+func (a *App) SetThreadService(s core.ThreadService) {
 	if s == nil {
 		s = noopThreadService
 	}
@@ -2975,7 +2975,7 @@ func (a *App) SetInitialChannel(channelID, channelName string, msgs []messages.M
 // The supplied service handles both reaction add/remove and frecent
 // emoji bookkeeping; build one via NewReactionService from
 // internal/ui/services.go.
-func (a *App) SetReactionService(r ReactionService) {
+func (a *App) SetReactionService(r core.ReactionService) {
 	if r == nil {
 		r = noopReactionService
 	}

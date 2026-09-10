@@ -1,38 +1,20 @@
-// internal/ui/services.go
+// Service ports the TUI calls. Implementations are wired by cmd/slk.
 //
-// Service interfaces that group cohesive subsets of the App's
-// collaborator callbacks. Wired by cmd/slk/main.go.
-//
-// Phase 3 of the SOLID refactor of internal/ui/app.go: introduces
-// service interfaces (DIP + ISP) to replace the flat collection of
-// XxxFunc callback fields that previously hung off App. Each interface
-// groups related callbacks under one collaborator; App holds a single
-// pointer per service instead of N raw functions.
-//
-// Migration strategy: one service per commit, smallest first. Each
-// commit converts a related subset of XxxFunc fields + Set* methods
-// to a single ServiceXxx interface + Set method. The XxxFunc type
-// aliases stay alive as constructor parameter types (documentation
-// value) and adapter input types until all services have migrated.
+// Each port can be built from plain closures with its NewXxxService
+// constructor; any nil closure makes that method a no-op returning the
+// zero value, which is how tests fake a single method.
 //
 // Constructor shape:
 //   - Services with ≤4 methods take positional func args
 //     (NewReactionService(add, remove, loadFrecent, recordFrecent)).
 //   - Services with ≥5 methods take a struct of named funcs
 //     (NewThreadService(ThreadServiceFuncs{Fetch: fn, Mark: fn, ...})).
-//     Lets tests omit unused methods without trailing nils and lets
-//     readers see what each closure is doing at the call site.
-package ui
+package core
 
 import (
 	"context"
 
-	tea "charm.land/bubbletea/v2"
-
 	"github.com/gammons/slk/internal/ids"
-	"github.com/gammons/slk/internal/ui/channelfinder"
-	"github.com/gammons/slk/internal/ui/messages"
-	"github.com/gammons/slk/internal/ui/reactionpicker"
 )
 
 // ReactionService is the App's interface to the Slack reaction API
@@ -54,7 +36,7 @@ type ReactionService interface {
 	// LoadFrecent returns up to limit emoji entries from the user's
 	// recent-use history, ordered by frecency. May return nil; the
 	// reaction picker handles an empty slice as "no recents yet".
-	LoadFrecent(limit int) []reactionpicker.EmojiEntry
+	LoadFrecent(limit int) []EmojiEntry
 
 	// RecordFrecent records emoji as recently used so future
 	// LoadFrecent calls surface it. Called after every successful
@@ -81,12 +63,6 @@ func NewReactionService(
 	}
 }
 
-// noopReactionService is the default ReactionService wired into App
-// by NewApp so call sites can dispatch without nil-checks even when
-// no service has been registered (typically in tests that don't
-// exercise reaction paths).
-var noopReactionService ReactionService = reactionAdapter{}
-
 type reactionAdapter struct {
 	add           ReactionAddFunc
 	remove        ReactionRemoveFunc
@@ -108,7 +84,7 @@ func (r reactionAdapter) Remove(channelID ids.ChannelID, messageTS ids.MessageTS
 	return r.remove(channelID, messageTS, emoji)
 }
 
-func (r reactionAdapter) LoadFrecent(limit int) []reactionpicker.EmojiEntry {
+func (r reactionAdapter) LoadFrecent(limit int) []EmojiEntry {
 	if r.loadFrecent == nil {
 		return nil
 	}
@@ -133,32 +109,32 @@ func (r reactionAdapter) RecordFrecent(emoji string) {
 // methods can be left nil without trailing positional nils.
 type ThreadService interface {
 	// Fetch retrieves replies for threadTS in channelID from Slack.
-	// Returns a tea.Msg (typically ThreadRepliesLoadedMsg).
-	Fetch(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg
+	// Returns a Msg (typically ThreadRepliesLoadedMsg).
+	Fetch(channelID ids.ChannelID, threadTS ids.ThreadTS) Msg
 
 	// CacheRead returns cached replies (or nil) so the thread panel
 	// can populate without waiting for the network. A non-empty
 	// return causes immediate render; the subsequent Fetch result
 	// overwrites with authoritative data.
-	CacheRead(channelID ids.ChannelID, threadTS ids.ThreadTS) []messages.MessageItem
+	CacheRead(channelID ids.ChannelID, threadTS ids.ThreadTS) []MessageItem
 
 	// Mark marks the thread as read on Slack's servers
 	// (subscriptions.thread.mark) and, on success, advances the local
 	// thread_subscriptions cursor. channelID is the parent channel,
 	// threadTS is the parent message ts, ts is the latest reply ts the
-	// user has now seen. Returns a tea.Cmd yielding ThreadMarkedLocalMsg.
-	Mark(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd
+	// user has now seen. Returns a Cmd yielding ThreadMarkedLocalMsg.
+	Mark(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) Cmd
 
 	// SendReply posts a reply to threadTS in channelID. When broadcast
 	// is true the reply is also posted to the parent channel feed
-	// (reply_broadcast=true). Returns a tea.Msg (typically
+	// (reply_broadcast=true). Returns a Msg (typically
 	// ThreadReplySentMsg or ThreadReplySendFailedMsg).
-	SendReply(channelID ids.ChannelID, threadTS ids.ThreadTS, text string, broadcast bool) tea.Msg
+	SendReply(channelID ids.ChannelID, threadTS ids.ThreadTS, text string, broadcast bool) Msg
 
 	// ListFetch loads the involved-threads list for the workspace
-	// (Slack subscriptions.list). Returns a tea.Msg (typically
+	// (Slack subscriptions.list). Returns a Msg (typically
 	// ThreadsListLoadedMsg).
-	ListFetch(teamID ids.TeamID) tea.Msg
+	ListFetch(teamID ids.TeamID) Msg
 
 	// EnsureSubscriptions kicks the workspace's throttled thread-
 	// subscription sync (subscriptions.thread.getView) in the
@@ -201,44 +177,39 @@ func NewThreadService(fns ThreadServiceFuncs) ThreadService {
 	return threadAdapter{fns: fns}
 }
 
-// noopThreadService is the default ThreadService wired into App by
-// NewApp so call sites can dispatch without nil-checks even when
-// SetThreadService hasn't been called.
-var noopThreadService ThreadService = threadAdapter{}
-
 type threadAdapter struct {
 	fns ThreadServiceFuncs
 }
 
-func (t threadAdapter) Fetch(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+func (t threadAdapter) Fetch(channelID ids.ChannelID, threadTS ids.ThreadTS) Msg {
 	if t.fns.Fetch == nil {
 		return nil
 	}
 	return t.fns.Fetch(channelID, threadTS)
 }
 
-func (t threadAdapter) CacheRead(channelID ids.ChannelID, threadTS ids.ThreadTS) []messages.MessageItem {
+func (t threadAdapter) CacheRead(channelID ids.ChannelID, threadTS ids.ThreadTS) []MessageItem {
 	if t.fns.CacheRead == nil {
 		return nil
 	}
 	return t.fns.CacheRead(channelID, threadTS)
 }
 
-func (t threadAdapter) Mark(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd {
+func (t threadAdapter) Mark(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) Cmd {
 	if t.fns.Mark == nil {
 		return nil
 	}
 	return t.fns.Mark(channelID, threadTS, ts)
 }
 
-func (t threadAdapter) SendReply(channelID ids.ChannelID, threadTS ids.ThreadTS, text string, broadcast bool) tea.Msg {
+func (t threadAdapter) SendReply(channelID ids.ChannelID, threadTS ids.ThreadTS, text string, broadcast bool) Msg {
 	if t.fns.SendReply == nil {
 		return nil
 	}
 	return t.fns.SendReply(channelID, threadTS, text, broadcast)
 }
 
-func (t threadAdapter) ListFetch(teamID ids.TeamID) tea.Msg {
+func (t threadAdapter) ListFetch(teamID ids.TeamID) Msg {
 	if t.fns.ListFetch == nil {
 		return nil
 	}
@@ -265,29 +236,29 @@ func (t threadAdapter) ThreadLastRead(channelID ids.ChannelID, threadTS ids.Thre
 //
 // All methods are best-effort and nil-safe at the adapter level: an
 // implementation built via NewMessageService with a nil component
-// silently no-ops that operation (returning nil tea.Msg or
+// silently no-ops that operation (returning nil Msg or
 // ("", nil) for Permalink).
 type MessageService interface {
 	// Send dispatches chat.postMessage for channelID with text.
-	// Returns a tea.Msg (typically MessageSentMsg or
+	// Returns a Msg (typically MessageSentMsg or
 	// MessageSendFailedMsg).
-	Send(channelID ids.ChannelID, text string) tea.Msg
+	Send(channelID ids.ChannelID, text string) Msg
 
 	// Edit dispatches chat.update for the message identified by
 	// (channelID, ts), replacing its text with newText.
-	// Returns a tea.Msg (typically MessageEditedMsg).
-	Edit(channelID ids.ChannelID, ts ids.MessageTS, newText string) tea.Msg
+	// Returns a Msg (typically MessageEditedMsg).
+	Edit(channelID ids.ChannelID, ts ids.MessageTS, newText string) Msg
 
 	// Delete dispatches chat.delete for the message identified by
-	// (channelID, ts). Returns a tea.Msg (typically MessageDeletedMsg).
-	Delete(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg
+	// (channelID, ts). Returns a Msg (typically MessageDeletedMsg).
+	Delete(channelID ids.ChannelID, ts ids.MessageTS) Msg
 
 	// MarkUnread dispatches conversations.mark (channel-level) or
 	// subscriptions.thread.mark (when threadTS != "") with the
 	// rolled-back boundaryTS. unreadCount is forwarded to the result
-	// for the sidebar's badge update. Returns a tea.Msg (typically
+	// for the sidebar's badge update. Returns a Msg (typically
 	// MessageMarkedUnreadMsg).
-	MarkUnread(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) tea.Msg
+	MarkUnread(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) Msg
 
 	// Permalink resolves the Slack permalink URL for the message
 	// identified by (channelID, ts). Used by the copy-permalink
@@ -313,37 +284,32 @@ func NewMessageService(fns MessageServiceFuncs) MessageService {
 	return messageAdapter{fns: fns}
 }
 
-// noopMessageService is the default MessageService wired into App by
-// NewApp so call sites can dispatch without nil-checks even when
-// SetMessageService hasn't been called.
-var noopMessageService MessageService = messageAdapter{}
-
 type messageAdapter struct {
 	fns MessageServiceFuncs
 }
 
-func (m messageAdapter) Send(channelID ids.ChannelID, text string) tea.Msg {
+func (m messageAdapter) Send(channelID ids.ChannelID, text string) Msg {
 	if m.fns.Send == nil {
 		return nil
 	}
 	return m.fns.Send(channelID, text)
 }
 
-func (m messageAdapter) Edit(channelID ids.ChannelID, ts ids.MessageTS, newText string) tea.Msg {
+func (m messageAdapter) Edit(channelID ids.ChannelID, ts ids.MessageTS, newText string) Msg {
 	if m.fns.Edit == nil {
 		return nil
 	}
 	return m.fns.Edit(channelID, ts, newText)
 }
 
-func (m messageAdapter) Delete(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+func (m messageAdapter) Delete(channelID ids.ChannelID, ts ids.MessageTS) Msg {
 	if m.fns.Delete == nil {
 		return nil
 	}
 	return m.fns.Delete(channelID, ts)
 }
 
-func (m messageAdapter) MarkUnread(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) tea.Msg {
+func (m messageAdapter) MarkUnread(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) Msg {
 	if m.fns.MarkUnread == nil {
 		return nil
 	}
@@ -371,24 +337,24 @@ func (m messageAdapter) Permalink(ctx context.Context, channelID ids.ChannelID, 
 // All methods are best-effort and nil-safe at the adapter level.
 type ChannelService interface {
 	// Fetch loads the most-recent messages for channelID from Slack.
-	// channelName is for log context. Returns a tea.Msg (typically
+	// channelName is for log context. Returns a Msg (typically
 	// MessagesLoadedMsg).
-	Fetch(channelID ids.ChannelID, channelName string) tea.Msg
+	Fetch(channelID ids.ChannelID, channelName string) Msg
 
 	// FetchOlder loads messages older than oldestTS for the
 	// channel-history backfill triggered by scroll-past-top.
-	// Returns a tea.Msg (typically OlderMessagesLoadedMsg).
-	FetchOlder(channelID ids.ChannelID, oldestTS ids.MessageTS) tea.Msg
+	// Returns a Msg (typically OlderMessagesLoadedMsg).
+	FetchOlder(channelID ids.ChannelID, oldestTS ids.MessageTS) Msg
 
 	// FetchAround loads a history window centered on ts for
-	// jump-to-message navigation. Returns a tea.Msg (typically
+	// jump-to-message navigation. Returns a Msg (typically
 	// MessagesAroundLoadedMsg).
-	FetchAround(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg
+	FetchAround(channelID ids.ChannelID, ts ids.MessageTS) Msg
 
 	// ReadCache returns the local-cache snapshot of channelID's
 	// recent messages, or nil if no cache exists. Used by
 	// ChannelSelectedMsg's tiered render policy.
-	ReadCache(channelID ids.ChannelID) []messages.MessageItem
+	ReadCache(channelID ids.ChannelID) []MessageItem
 
 	// SyncedAt returns the unix-seconds timestamp of the channel's
 	// last authoritative cache-from-network sync, or 0 if never
@@ -400,8 +366,8 @@ type ChannelService interface {
 	// MarkRead dispatches conversations.mark + UpdateChannelReadState
 	// to bring the channel's last_read_ts up to ts. Used by Tier 1
 	// of ChannelSelectedMsg when cache is provably fresh. Returns
-	// a tea.Msg (typically ChannelMarkedReadMsg).
-	MarkRead(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg
+	// a Msg (typically ChannelMarkedReadMsg).
+	MarkRead(channelID ids.ChannelID, ts ids.MessageTS) Msg
 
 	// Lookup returns metadata (name, channelType) for channelID, or
 	// ok=false if the channel is no longer available in the active
@@ -409,9 +375,9 @@ type ChannelService interface {
 	Lookup(channelID ids.ChannelID) (name, channelType string, ok bool)
 
 	// Join sends conversations.join for channelID. channelName is
-	// for log context. Returns a tea.Msg (typically ChannelJoinedMsg
+	// for log context. Returns a Msg (typically ChannelJoinedMsg
 	// or ChannelJoinFailedMsg).
-	Join(channelID ids.ChannelID, channelName string) tea.Msg
+	Join(channelID ids.ChannelID, channelName string) Msg
 
 	// RecordVisit persists a visit to channelID (SQLite write +
 	// WorkspaceContext last-visited map update). Fired once per
@@ -424,15 +390,15 @@ type ChannelService interface {
 	MembershipFetch(channelID ids.ChannelID)
 
 	// OpenConversation dispatches conversations.open for userIDs (1
-	// recipient = IM, 2-8 recipients = MPIM). Returns a tea.Cmd whose
-	// resolved tea.Msg is NewMessageOpenedMsg on success or
+	// recipient = IM, 2-8 recipients = MPIM). Returns a Cmd whose
+	// resolved Msg is NewMessageOpenedMsg on success or
 	// NewMessageFailedMsg on error; both carry requestID so the
 	// reducer can drop late results from cancelled submits.
-	OpenConversation(userIDs []string, requestID uint64) tea.Cmd
+	OpenConversation(userIDs []string, requestID uint64) Cmd
 
 	// SearchRemote asks the server which channels match query,
 	// including ones the user has not joined, and blocks until it
-	// answers. Callers run it from a tea.Cmd, debounced — see
+	// answers. Callers run it from a Cmd, debounced — see
 	// App.scheduleChannelSearch.
 	//
 	// It replaced a background conversations.list walk that ran at
@@ -440,7 +406,7 @@ type ChannelService interface {
 	// opened. Returning nil (no client, or a failed request) leaves
 	// the finder showing local matches only, which is what it showed
 	// before this existed.
-	SearchRemote(query string) []channelfinder.Item
+	SearchRemote(query string) []ChannelFinderItem
 }
 
 // ChannelServiceFuncs is the closure bundle accepted by
@@ -449,16 +415,16 @@ type ChannelService interface {
 type ChannelServiceFuncs struct {
 	Fetch            ChannelFetchFunc
 	FetchOlder       OlderMessagesFetchFunc
-	FetchAround      func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg
+	FetchAround      func(channelID ids.ChannelID, ts ids.MessageTS) Msg
 	ReadCache        ChannelCacheReadFunc
 	SyncedAt         func(channelID ids.ChannelID) int64
-	MarkRead         func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg
+	MarkRead         func(channelID ids.ChannelID, ts ids.MessageTS) Msg
 	Lookup           ChannelLookupFunc
 	Join             JoinChannelFunc
 	RecordVisit      ChannelVisitRecorder
 	MembershipFetch  func(channelID ids.ChannelID)
-	OpenConversation func(userIDs []string, requestID uint64) tea.Cmd
-	SearchRemote     func(query string) []channelfinder.Item
+	OpenConversation func(userIDs []string, requestID uint64) Cmd
+	SearchRemote     func(query string) []ChannelFinderItem
 }
 
 // NewChannelService builds a ChannelService from a
@@ -467,36 +433,32 @@ func NewChannelService(fns ChannelServiceFuncs) ChannelService {
 	return channelAdapter{fns: fns}
 }
 
-// noopChannelService is the default ChannelService wired into App
-// by NewApp so call sites can dispatch without nil-checks.
-var noopChannelService ChannelService = channelAdapter{}
-
 type channelAdapter struct {
 	fns ChannelServiceFuncs
 }
 
-func (c channelAdapter) Fetch(channelID ids.ChannelID, channelName string) tea.Msg {
+func (c channelAdapter) Fetch(channelID ids.ChannelID, channelName string) Msg {
 	if c.fns.Fetch == nil {
 		return nil
 	}
 	return c.fns.Fetch(channelID, channelName)
 }
 
-func (c channelAdapter) FetchOlder(channelID ids.ChannelID, oldestTS ids.MessageTS) tea.Msg {
+func (c channelAdapter) FetchOlder(channelID ids.ChannelID, oldestTS ids.MessageTS) Msg {
 	if c.fns.FetchOlder == nil {
 		return nil
 	}
 	return c.fns.FetchOlder(channelID, oldestTS)
 }
 
-func (c channelAdapter) FetchAround(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+func (c channelAdapter) FetchAround(channelID ids.ChannelID, ts ids.MessageTS) Msg {
 	if c.fns.FetchAround == nil {
 		return nil
 	}
 	return c.fns.FetchAround(channelID, ts)
 }
 
-func (c channelAdapter) ReadCache(channelID ids.ChannelID) []messages.MessageItem {
+func (c channelAdapter) ReadCache(channelID ids.ChannelID) []MessageItem {
 	if c.fns.ReadCache == nil {
 		return nil
 	}
@@ -510,7 +472,7 @@ func (c channelAdapter) SyncedAt(channelID ids.ChannelID) int64 {
 	return c.fns.SyncedAt(channelID)
 }
 
-func (c channelAdapter) MarkRead(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+func (c channelAdapter) MarkRead(channelID ids.ChannelID, ts ids.MessageTS) Msg {
 	if c.fns.MarkRead == nil {
 		return nil
 	}
@@ -524,7 +486,7 @@ func (c channelAdapter) Lookup(channelID ids.ChannelID) (name, channelType strin
 	return c.fns.Lookup(channelID)
 }
 
-func (c channelAdapter) Join(channelID ids.ChannelID, channelName string) tea.Msg {
+func (c channelAdapter) Join(channelID ids.ChannelID, channelName string) Msg {
 	if c.fns.Join == nil {
 		return nil
 	}
@@ -545,14 +507,14 @@ func (c channelAdapter) MembershipFetch(channelID ids.ChannelID) {
 	c.fns.MembershipFetch(channelID)
 }
 
-func (c channelAdapter) SearchRemote(query string) []channelfinder.Item {
+func (c channelAdapter) SearchRemote(query string) []ChannelFinderItem {
 	if c.fns.SearchRemote == nil {
 		return nil
 	}
 	return c.fns.SearchRemote(query)
 }
 
-func (c channelAdapter) OpenConversation(userIDs []string, requestID uint64) tea.Cmd {
+func (c channelAdapter) OpenConversation(userIDs []string, requestID uint64) Cmd {
 	if c.fns.OpenConversation == nil {
 		return nil
 	}
@@ -565,40 +527,117 @@ func (c channelAdapter) OpenConversation(userIDs []string, requestID uint64) tea
 type SearchService interface {
 	// SearchChannel returns a ChannelSearchResultsMsg for query in
 	// channelID's cached history.
-	SearchChannel(channelID ids.ChannelID, query string) tea.Msg
+	SearchChannel(channelID ids.ChannelID, query string) Msg
 	// SearchWorkspace returns a WorkspaceSearchResultsMsg for query
 	// across the active workspace (server-side).
-	SearchWorkspace(query string) tea.Msg
+	SearchWorkspace(query string) Msg
 }
 
 // SearchServiceFuncs is the closure bundle accepted by
 // NewSearchService. Any field may be nil; that operation no-ops.
 type SearchServiceFuncs struct {
-	SearchChannel   func(channelID ids.ChannelID, query string) tea.Msg
-	SearchWorkspace func(query string) tea.Msg
+	SearchChannel   func(channelID ids.ChannelID, query string) Msg
+	SearchWorkspace func(query string) Msg
 }
 
 // NewSearchService builds a SearchService from a SearchServiceFuncs
 // bundle. Used by cmd/slk/main.go (production wiring) and tests.
 func NewSearchService(fns SearchServiceFuncs) SearchService { return searchAdapter{fns: fns} }
 
-// noopSearchService is the default SearchService wired into App by
-// NewApp so call sites can dispatch without nil-checks even when
-// SetSearchService hasn't been called.
-var noopSearchService SearchService = searchAdapter{}
-
 type searchAdapter struct{ fns SearchServiceFuncs }
 
-func (s searchAdapter) SearchChannel(channelID ids.ChannelID, query string) tea.Msg {
+func (s searchAdapter) SearchChannel(channelID ids.ChannelID, query string) Msg {
 	if s.fns.SearchChannel == nil {
 		return nil
 	}
 	return s.fns.SearchChannel(channelID, query)
 }
 
-func (s searchAdapter) SearchWorkspace(query string) tea.Msg {
+func (s searchAdapter) SearchWorkspace(query string) Msg {
 	if s.fns.SearchWorkspace == nil {
 		return nil
 	}
 	return s.fns.SearchWorkspace(query)
 }
+
+// Closure types accepted by the constructors above.
+
+// ChannelFetchFunc is called when the user selects a channel.
+type ChannelFetchFunc func(channelID ids.ChannelID, channelName string) Msg
+
+// ChannelCacheReadFunc is called synchronously when the user selects a
+// channel; it returns cached messages from local storage. Returning a
+// non-empty slice causes the messagepane to render immediately without
+// the loading spinner. Returning nil falls through to the network
+// fetcher.
+type ChannelCacheReadFunc func(channelID ids.ChannelID) []MessageItem
+
+// OlderMessagesFetchFunc is called when the user scrolls to the top of a channel.
+type OlderMessagesFetchFunc func(channelID ids.ChannelID, oldestTS ids.MessageTS) Msg
+
+// MessageSendFunc is called when the user sends a message. Returns a Msg with the result.
+type MessageSendFunc func(channelID ids.ChannelID, text string) Msg
+
+// MessageEditFunc performs the chat.update API call. Returns a Msg
+// (typically MessageEditedMsg) describing the result.
+type MessageEditFunc func(channelID ids.ChannelID, ts ids.MessageTS, newText string) Msg
+
+// MessageDeleteFunc performs the chat.delete API call. Returns a Msg
+// (typically MessageDeletedMsg) describing the result.
+type MessageDeleteFunc func(channelID ids.ChannelID, ts ids.MessageTS) Msg
+
+// MarkUnreadFunc performs the conversations.mark or
+// subscriptions.thread.mark HTTP call (with the rolled-back ts /
+// read=0 form), updates SQLite + in-memory caches if the call
+// succeeded, and returns a Msg (typically MessageMarkedUnreadMsg)
+// describing the result. ThreadTS == "" means channel-level.
+type MarkUnreadFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) Msg
+
+// ThreadFetchFunc is called when the user opens a thread.
+type ThreadFetchFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS) Msg
+
+// ThreadCacheReadFunc is called synchronously when a thread is opened;
+// returns cached replies (or nil) so the thread panel can populate
+// without waiting for the network. Returning a non-empty slice causes
+// the thread panel to render immediately; the subsequent network
+// response overwrites with authoritative data.
+type ThreadCacheReadFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS) []MessageItem
+
+// ThreadMarkFunc is called to mark a thread as read on Slack's servers
+// (subscriptions.thread.mark) and, on success, to advance the local
+// thread_subscriptions cursor. Returns a Cmd yielding
+// ThreadMarkedLocalMsg, or nil when no workspace is active.
+type ThreadMarkFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) Cmd
+
+// ThreadReplySendFunc is called when the user sends a thread reply.
+// broadcast is Slack's "Also send to #channel" (reply_broadcast=true).
+type ThreadReplySendFunc func(channelID ids.ChannelID, threadTS ids.ThreadTS, text string, broadcast bool) Msg
+
+// ThreadsListFetchFunc loads the involved-threads list for a workspace.
+// Returns the resulting Msg (typically ThreadsListLoadedMsg).
+type ThreadsListFetchFunc func(teamID ids.TeamID) Msg
+
+type ReactionAddFunc func(channelID ids.ChannelID, messageTS ids.MessageTS, emoji string) error
+type ReactionRemoveFunc func(channelID ids.ChannelID, messageTS ids.MessageTS, emoji string) error
+
+// PermalinkFetchFunc is called to fetch the Slack permalink for a message.
+// For thread replies, pass the reply's ts; Slack returns a thread-aware URL.
+type PermalinkFetchFunc func(ctx context.Context, channelID ids.ChannelID, ts ids.MessageTS) (string, error)
+type FrecentLoadFunc func(limit int) []EmojiEntry
+type FrecentRecordFunc func(emoji string)
+
+// JoinChannelFunc is called to join a public channel by ID. Returns a Msg
+// describing the result (typically ChannelJoinedMsg or ChannelJoinFailedMsg).
+type JoinChannelFunc func(channelID ids.ChannelID, channelName string) Msg
+
+// ChannelVisitRecorder is invoked from case ChannelSelectedMsg to let
+// main.go persist the visit (SQLite write + in-memory map update on
+// the WorkspaceContext). Always called regardless of FromHistory.
+type ChannelVisitRecorder func(channelID ids.ChannelID)
+
+// ChannelLookupFunc returns metadata for a channel that the App has
+// in its navigation history. Used by navigateBack / navigateForward
+// to skip stale entries (channels the user has left, archived, or
+// kicked from). Returns ok=false when the channel is no longer
+// available in the active workspace.
+type ChannelLookupFunc func(channelID ids.ChannelID) (name, channelType string, ok bool)

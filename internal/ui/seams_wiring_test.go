@@ -5,6 +5,7 @@ import (
 	"golang.design/x/clipboard"
 
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/presencemenu"
@@ -76,17 +77,35 @@ func wireEditor(a *App, argv []string) {
 }
 
 func wireChannelFetch(a *App, fn func(channelID ids.ChannelID, channelName string) tea.Msg) {
-	a.SetChannelService(NewChannelService(ChannelServiceFuncs{Fetch: fn}))
+	a.SetChannelService(core.NewChannelService(core.ChannelServiceFuncs{
+		Fetch: func(ch ids.ChannelID, name string) core.Msg { return fn(ch, name) },
+	}))
 }
 
 func wireOpenConversation(a *App, fn func(userIDs []string, requestID uint64) tea.Cmd) {
-	a.SetChannelService(NewChannelService(ChannelServiceFuncs{OpenConversation: fn}))
+	a.SetChannelService(core.NewChannelService(core.ChannelServiceFuncs{
+		OpenConversation: func(userIDs []string, requestID uint64) core.Cmd { return coreCmd(fn(userIDs, requestID)) },
+	}))
 }
 
 func wireMessageSend(a *App, fn func(channelID ids.ChannelID, text string) tea.Msg) {
-	a.SetMessageService(NewMessageService(MessageServiceFuncs{Send: fn}))
+	a.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
+		Send: func(ch ids.ChannelID, text string) core.Msg { return fn(ch, text) },
+	}))
 }
 
 func wireThreadMark(a *App, fn func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd) {
-	a.SetThreadService(NewThreadService(ThreadServiceFuncs{Mark: fn}))
+	a.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+		Mark: func(ch ids.ChannelID, thread ids.ThreadTS, ts ids.MessageTS) core.Cmd {
+			return coreCmd(fn(ch, thread, ts))
+		},
+	}))
+}
+
+// coreCmd is teaCmd in reverse, for scenarios written against tea.Cmd.
+func coreCmd(c tea.Cmd) core.Cmd {
+	if c == nil {
+		return nil
+	}
+	return func() core.Msg { return c() }
 }

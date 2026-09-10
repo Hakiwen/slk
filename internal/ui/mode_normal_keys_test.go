@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -2227,7 +2228,7 @@ func wireSwitcher(t *testing.T, a *App) {
 // fails (navhistory.go:116-122), so without this every nav-history row
 // would silently report "no valid earlier entry".
 func navLookupOpt() testOpt {
-	return withChannelService(ChannelServiceFuncs{
+	return withChannelService(core.ChannelServiceFuncs{
 		Lookup: func(id ids.ChannelID) (string, string, bool) {
 			switch string(id) {
 			case "C1":

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 )
 
@@ -16,7 +17,7 @@ func newFinderApp(t *testing.T, searched *[]string, results []channelfinder.Item
 	return newTestApp(t,
 		withSize(0, 0),
 		withActiveTeam("T1"),
-		withChannelService(ChannelServiceFuncs{
+		withChannelService(core.ChannelServiceFuncs{
 			SearchRemote: func(query string) []channelfinder.Item {
 				*searched = append(*searched, query)
 				return results
