@@ -884,7 +884,7 @@ func run() error {
 
 	// Load custom themes and apply the active theme
 	themesDir := filepath.Join(configDir, "themes")
-	styles.LoadCustomThemes(themesDir)
+	styles.LoadCustomThemes(os.DirFS(themesDir))
 	// At startup we apply the global default. The per-workspace theme
 	// for the initial active workspace is then re-applied via
 	// WorkspaceReadyMsg.Theme once that workspace finishes connecting,
