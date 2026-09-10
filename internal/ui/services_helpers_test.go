@@ -125,8 +125,6 @@ func (a *App) setChannelMembershipFetcherForTest(fn func(channelID ids.ChannelID
 type wiring struct {
 	upload           func(channelID, threadTS, caption string, attachments []core.PendingAttachment) core.Cmd
 	desktop          core.DesktopServiceFuncs
-	setStatus        func(action core.PresenceAction, snoozeMinutes int)
-	sendTyping       func(channelID string)
 	saveTheme        func(name string, scope core.ThemeScope)
 	saveSidebarWidth func(width int)
 	readStates       func() map[string]core.ReadState
@@ -201,13 +199,7 @@ func (a *App) setStatusReporterForTest(fn func(unread, otherUnread int, workspac
 }
 
 func (a *App) setStatusSetterForTest(fn func(action presencemenu.Action, snoozeMinutes int)) {
-	w := rewire(a, func(w *wiring) { w.setStatus = fn })
-	a.SetPresenceService(core.NewPresenceService(w.setStatus, w.sendTyping))
-}
-
-func (a *App) setTypingSenderForTest(fn func(channelID string)) {
-	w := rewire(a, func(w *wiring) { w.sendTyping = fn })
-	a.SetPresenceService(core.NewPresenceService(w.setStatus, w.sendTyping))
+	a.SetPresenceService(core.NewPresenceService(fn, nil))
 }
 
 func (a *App) setThemeSaverForTest(fn func(name string, scope themeswitcher.ThemeScope)) {
