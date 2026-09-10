@@ -18,8 +18,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/cache"
-	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/export"
@@ -472,7 +471,7 @@ type App struct {
 
 	// Theme switching
 	themeSaveFn    func(name string, scope themeswitcher.ThemeScope)
-	themeOverrides config.Theme
+	themeOverrides core.Theme
 
 	// Sidebar width persistence
 	widthSaveFn func(width int)
@@ -2483,7 +2482,7 @@ func (a *App) SetThreadService(s ThreadService) {
 // SetReadStateReader installs a callback the sidebar (and any future
 // readers) will call at render time to fetch per-channel read state.
 // Must be set before the first render for unread dots to appear.
-func (a *App) SetReadStateReader(f func() map[string]cache.ReadState) {
+func (a *App) SetReadStateReader(f func() map[string]core.ReadState) {
 	a.sidebar.SetReadStateReader(f)
 }
 
@@ -3080,7 +3079,7 @@ func (a *App) SetStatusSetter(fn func(action presencemenu.Action, snoozeMinutes 
 }
 
 // SetThemeOverrides stores the config theme overrides for applying on switch.
-func (a *App) SetThemeOverrides(overrides config.Theme) {
+func (a *App) SetThemeOverrides(overrides core.Theme) {
 	a.themeOverrides = overrides
 }
 
