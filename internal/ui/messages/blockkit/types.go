@@ -18,6 +18,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/core/blocks"
 	imgpkg "github.com/gammons/slk/internal/image"
 )
@@ -87,7 +88,7 @@ type HitRect struct {
 // are zero (e.g. no image rendering when Fetcher is nil).
 type Context struct {
 	Protocol    imgpkg.Protocol
-	Fetcher     *imgpkg.Fetcher
+	Fetcher     core.ImageFetcher
 	KittyRender *imgpkg.KittyRenderer
 	CellPixels  image.Point
 	MaxRows     int // for full-size image blocks

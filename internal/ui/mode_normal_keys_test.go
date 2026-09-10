@@ -116,7 +116,7 @@ func unreadOpts() []testOpt {
 // four in input order.
 func seedUnreads(t *testing.T, a *App) {
 	t.Helper()
-	a.SetReadStateReader(func() map[string]cache.ReadState {
+	a.setReadStateReaderForTest(func() map[string]cache.ReadState {
 		return map[string]cache.ReadState{
 			"C2": {HasUnread: true},
 			"C4": {HasUnread: true},
@@ -233,7 +233,7 @@ func seedActiveSearch(t *testing.T, a *App) {
 // pre-emptions (image-preview swallow at app.go:643, bootstrap gate at
 // :715) are state-conditional rather than key-specific.
 func TestNormalModeKeys(t *testing.T) {
-	// The sidebar width rows need to observe the widthSaveFn callback,
+	// The sidebar width rows need to observe the settings service,
 	// which is only reachable from inside setup. Recording into these
 	// (rows run sequentially -- nothing in this repo calls t.Parallel)
 	// is what separates "the width changed" from "the width changed AND
@@ -702,8 +702,8 @@ func TestNormalModeKeys(t *testing.T) {
 			opts: normalOpts(),
 			setup: func(t *testing.T, a *App) {
 				grewTo = nil
-				a.SetWidthSaver(func(w int) { grewTo = append(grewTo, w) })
-				if a.widthSaveFn == nil {
+				a.setWidthSaverForTest(func(w int) { grewTo = append(grewTo, w) })
+				if a.settings == nil {
 					t.Fatal("precondition: width saver not wired")
 				}
 				if got := a.sidebar.Width(); got != sidebarBaseWidth(t) {
@@ -729,7 +729,7 @@ func TestNormalModeKeys(t *testing.T) {
 			opts: normalOpts(),
 			setup: func(t *testing.T, a *App) {
 				shrankTo = nil
-				a.SetWidthSaver(func(w int) { shrankTo = append(shrankTo, w) })
+				a.setWidthSaverForTest(func(w int) { shrankTo = append(shrankTo, w) })
 				if got := a.sidebar.Width(); got != sidebarBaseWidth(t) {
 					t.Fatalf("precondition: sidebar width = %d, want the default %d", got, sidebarBaseWidth(t))
 				}
@@ -2210,12 +2210,12 @@ func workspaceOpts() []testOpt {
 
 // wireSwitcher installs an observable workspace switcher and asserts the
 // rail starts on T1. Both halves matter: mode_normal.go:309 requires a
-// non-nil a.workspaceSwitcher before it will emit anything, and :310
+// non-nil a.workspaceSvc before it will emit anything, and :310
 // compares against a.workspaceRail.SelectedID(), so a rail that did not
 // start on T1 would silently turn the `1` row into a different test.
 func wireSwitcher(t *testing.T, a *App) {
 	t.Helper()
-	a.SetWorkspaceSwitcher(func(teamID string) tea.Msg {
+	a.setWorkspaceSwitcherForTest(func(teamID string) tea.Msg {
 		return switchedTeamMsg{teamID: teamID}
 	})
 	if got := a.workspaceRail.SelectedID(); got != "T1" {

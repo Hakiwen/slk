@@ -497,7 +497,7 @@ func nameGoldenActiveChannel(a *App) {
 // TestNewGoldenApp_SidebarPinsUnreadAndMuteIndicators asserts both
 // halves are actually on screen.
 func wireGoldenReadState(a *App) {
-	a.SetReadStateReader(goldenReadState)
+	a.setReadStateReaderForTest(goldenReadState)
 }
 
 // goldenTS builds a Slack timestamp offset from goldenClock.

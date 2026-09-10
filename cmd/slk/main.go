@@ -27,6 +27,7 @@ import (
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	emojiwidth "github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/export"
 	"github.com/gammons/slk/internal/filedl"
 	"github.com/gammons/slk/internal/ids"
 	imgpkg "github.com/gammons/slk/internal/image"
@@ -903,8 +904,8 @@ func run() error {
 	// Otherwise (X11 / macOS / Windows) use the native library.
 	clipboardOK := true
 	useWaylandClipboard := false
-	if ui.IsWayland() {
-		if ui.HasWlPaste() {
+	if IsWayland() {
+		if HasWlPaste() {
 			useWaylandClipboard = true
 		} else {
 			log.Printf("Warning: WAYLAND_DISPLAY set but wl-paste not on PATH; install wl-clipboard for paste-to-upload. Ctrl+V image paste disabled.")
@@ -977,16 +978,23 @@ func run() error {
 	app.SetSixelFrameStore(sixelFrames)
 	app.SetHelpFooter(versionpkg.ModalFooter(version))
 	app.SetClipboardAvailable(clipboardOK)
+	desktop := core.DesktopServiceFuncs{
+		Open:          launchOS,
+		ReadClipboard: nativeClipboardRead,
+		Stat:          os.Stat,
+		SaveThread:    export.SaveThread,
+	}
 	if sr := notify.NewStatusReporter(cfg.Notifications.StatusCommand); sr != nil {
 		// Enqueue never blocks a render: it hands the state to the reporter's
 		// single worker, which serializes runs and coalesces bursts so the
 		// external surface can't end up pinned to a stale count by an
 		// out-of-order subprocess.
-		app.SetStatusReporter(sr.Enqueue)
+		desktop.ReportStatus = sr.Enqueue
 	}
 	if useWaylandClipboard {
-		app.SetClipboardReader(ui.WaylandClipboardReader())
+		desktop.ReadClipboard = WaylandClipboardReader()
 	}
+	app.SetDesktopService(core.NewDesktopService(desktop))
 
 	// Connect to workspaces
 	ctx := context.Background()
@@ -1169,7 +1177,6 @@ func run() error {
 	}
 	app.SetImageContext(buildImgCtx(nil))
 	app.SetImageFetcher(imageFetcher)
-	app.SetFileDownloader(fileDownloader)
 	app.SetImageProtocol(proto)
 
 	// Emoji-image rendering. Active only on kitty (per ImageMode
@@ -1251,7 +1258,7 @@ func run() error {
 	// thousands of users) wrote ~100MB of kitty graphics APC escape
 	// data to stdout at startup and produced a multi-minute hang on
 	// terminals that decode kitty graphics (kitty, ghostty).
-	app.SetAvatarFunc(func(userID string) string {
+	app.SetAvatarService(core.NewAvatarService(func(userID string) string {
 		if rendered := avatarCache.Get(userID); rendered != "" {
 			return rendered
 		}
@@ -1269,10 +1276,10 @@ func run() error {
 			}
 		}
 		return ""
-	})
+	}))
 
 	// Wire theme switcher: dispatch to the appropriate saver based on scope.
-	app.SetThemeSaver(func(name string, scope themeswitcher.ThemeScope) {
+	saveTheme := func(name string, scope themeswitcher.ThemeScope) {
 		switch scope {
 		case themeswitcher.ScopeWorkspace:
 			if activeTeamID == "" {
@@ -1311,10 +1318,10 @@ func run() error {
 				log.Printf("save global theme: %v", err)
 			}
 		}
-	})
+	}
 
 	// Wire sidebar width saver: always persist to the active workspace.
-	app.SetWidthSaver(func(width int) {
+	saveSidebarWidth := func(width int) {
 		if activeTeamID == "" {
 			return
 		}
@@ -1339,12 +1346,13 @@ func run() error {
 		if err := saveWorkspaceWidth(configPath, tomlKey, activeTeamID, teamName, width); err != nil {
 			log.Printf("save workspace sidebar width: %v", err)
 		}
-	})
+	}
+	app.SetSettingsService(core.NewSettingsService(saveTheme, saveSidebarWidth))
 
 	// Wire presence/DND status setter. Resolves activeTeamID through
 	// the router at invocation so the closure always targets the
 	// currently-active workspace context.
-	app.SetStatusSetter(func(action presencemenu.Action, snoozeMinutes int) {
+	setStatus := func(action presencemenu.Action, snoozeMinutes int) {
 		wctx := router.ByID(activeTeamID)
 		if wctx == nil || wctx.Client == nil {
 			return
@@ -1380,7 +1388,7 @@ func run() error {
 				p.Send(ui.ToastMsg{Text: "Status change failed: " + err.Error()})
 			}
 		}()
-	})
+	}
 
 	// wireCallbacks installs all App callbacks once at startup. Each
 	// callback reads router.Active() at invocation time, so the
@@ -1392,7 +1400,7 @@ func run() error {
 	// vars BEFORE the `go func()` so they are not affected by a
 	// concurrent router.Set during the goroutine's lifetime.
 	wireCallbacks := func(router *workspaceRouter) {
-		app.SetReadStateReader(func() map[string]cache.ReadState {
+		channelReadStates := func() map[string]cache.ReadState {
 			wctx := router.Active()
 			if wctx == nil {
 				return nil
@@ -1403,16 +1411,17 @@ func run() error {
 				return nil
 			}
 			return state
-		})
+		}
 
-		app.SetWorkspaceUnreadReader(func() []string {
+		unreadWorkspaces := func() []string {
 			unread, err := db.UnreadChannels()
 			if err != nil {
 				log.Printf("Warning: UnreadChannels: %v", err)
 				return nil
 			}
 			return railUnreadWorkspaces(unread, router.ByID)
-		})
+		}
+		app.SetUnreadService(core.NewUnreadService(channelReadStates, unreadWorkspaces))
 
 		app.SetChannelService(core.NewChannelService(core.ChannelServiceFuncs{
 			RecordVisit: func(channelID ids.ChannelID) {
@@ -1755,8 +1764,8 @@ func run() error {
 			},
 		}))
 
-		app.SetUploader(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
-			return func() tea.Msg {
+		upload := func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) core.Cmd {
+			return func() core.Msg {
 				wctx := router.Active()
 				if wctx == nil {
 					return nil
@@ -1792,7 +1801,8 @@ func run() error {
 				p.Send(ui.UploadProgressMsg{Done: len(attachments), Total: len(attachments)})
 				return ui.UploadResultMsg{Err: nil}
 			}
-		})
+		}
+		app.SetFileService(core.NewFileService(upload, fileDownloader.Download))
 
 		app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
 			Fetch: func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
@@ -1975,13 +1985,14 @@ func run() error {
 			},
 		))
 
-		app.SetTypingSender(func(channelID string) {
+		sendTyping := func(channelID string) {
 			wctx := router.Active()
 			if wctx == nil {
 				return
 			}
 			_ = wctx.Client.SendTyping(channelID)
-		})
+		}
+		app.SetPresenceService(core.NewPresenceService(setStatus, sendTyping))
 
 	}
 
@@ -1989,7 +2000,7 @@ func run() error {
 	wireCallbacks(router)
 
 	// Wire workspace switcher
-	app.SetWorkspaceSwitcher(func(teamID string) tea.Msg {
+	app.SetWorkspaceService(core.NewWorkspaceService(func(teamID string) core.Msg {
 		wctx := router.ByID(teamID)
 		if wctx == nil {
 			return nil
@@ -2028,7 +2039,7 @@ func run() error {
 			UserGroups:       wctx.UserGroups(),
 			SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 		}
-	})
+	}))
 
 	// Resolve general.default_workspace if set. We honor it only if
 	// the matching token is actually configured; otherwise fall back

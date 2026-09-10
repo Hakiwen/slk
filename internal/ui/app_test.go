@@ -356,7 +356,7 @@ func TestHandleInsertMode_AttachmentSendReturnsToNormalMode(t *testing.T) {
 	app.compose.AddAttachment(compose.PendingAttachment{
 		Filename: "a.png", Bytes: []byte("png"), Size: 3,
 	})
-	app.SetUploader(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
+	app.setUploaderForTest(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
 		return func() tea.Msg { return UploadResultMsg{Err: nil} }
 	})
 
@@ -382,7 +382,7 @@ func TestHandleInsertMode_ThreadAttachmentSendReturnsToNormalMode(t *testing.T) 
 	app.threadCompose.AddAttachment(compose.PendingAttachment{
 		Filename: "a.png", Bytes: []byte("png"), Size: 3,
 	})
-	app.SetUploader(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
+	app.setUploaderForTest(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
 		return func() tea.Msg { return UploadResultMsg{Err: nil} }
 	})
 
@@ -1941,9 +1941,9 @@ func TestNewMessageMsg_EditedIgnoresOtherChannel(t *testing.T) {
 	}
 }
 
-// fakeClipboard returns a clipboardReader that returns canned bytes
+// fakeClipboard returns a clipboard reader that returns canned bytes
 // for FmtImage and FmtText.
-func fakeClipboard(image, text []byte) clipboardReader {
+func fakeClipboard(image, text []byte) func(clipboard.Format) []byte {
 	return func(f clipboard.Format) []byte {
 		switch f {
 		case clipboard.FmtImage:
@@ -1962,7 +1962,7 @@ func TestSmartPaste_ImagePresent_AttachesToCompose(t *testing.T) {
 	app.focusedPanel = PanelMessages
 	app.SetMode(ModeInsert)
 	pngBytes := []byte("\x89PNG\r\n\x1a\nfake")
-	app.SetClipboardReader(fakeClipboard(pngBytes, nil))
+	app.setClipboardReaderForTest(fakeClipboard(pngBytes, nil))
 
 	app.smartPaste()
 
@@ -1988,7 +1988,7 @@ func TestSmartPaste_ImageTooLarge_Refuses(t *testing.T) {
 	app.focusedPanel = PanelMessages
 	app.SetMode(ModeInsert)
 	huge := make([]byte, 11*1024*1024)
-	app.SetClipboardReader(fakeClipboard(huge, nil))
+	app.setClipboardReaderForTest(fakeClipboard(huge, nil))
 
 	app.smartPaste()
 
@@ -2009,7 +2009,8 @@ func TestSmartPaste_FilePathPresent_AttachesByPath(t *testing.T) {
 	app.activeChannelID = "C1"
 	app.focusedPanel = PanelMessages
 	app.SetMode(ModeInsert)
-	app.SetClipboardReader(fakeClipboard(nil, []byte(path)))
+	app.setClipboardReaderForTest(fakeClipboard(nil, []byte(path)))
+	app.setFilesystemForTest()
 
 	app.smartPaste()
 
@@ -2031,7 +2032,7 @@ func TestSmartPaste_NoImage_NoValidPath_FallsThroughToText(t *testing.T) {
 	app.activeChannelID = "C1"
 	app.focusedPanel = PanelMessages
 	app.SetMode(ModeInsert)
-	app.SetClipboardReader(fakeClipboard(nil, []byte("just some text")))
+	app.setClipboardReaderForTest(fakeClipboard(nil, []byte("just some text")))
 
 	app.smartPaste()
 
@@ -2051,7 +2052,7 @@ func TestSmartPaste_ClipboardUnavailable_NoOp(t *testing.T) {
 	app.focusedPanel = PanelMessages
 	app.SetMode(ModeInsert)
 	pngBytes := []byte("\x89PNGfake")
-	app.SetClipboardReader(fakeClipboard(pngBytes, nil))
+	app.setClipboardReaderForTest(fakeClipboard(pngBytes, nil))
 
 	app.smartPaste()
 
@@ -2068,7 +2069,7 @@ func TestSmartPaste_ThreadPane_AttachesToThreadCompose(t *testing.T) {
 	app.threadVisible = true
 	app.focusedPanel = PanelThread
 	app.SetMode(ModeInsert)
-	app.SetClipboardReader(fakeClipboard([]byte("\x89PNG"), nil))
+	app.setClipboardReaderForTest(fakeClipboard([]byte("\x89PNG"), nil))
 
 	app.smartPaste()
 
@@ -2091,7 +2092,7 @@ func TestSubmitWithAttachments_InvokesUploaderAndSetsUploading(t *testing.T) {
 	app.compose.SetValue("look")
 	// Set a no-op uploader so the cmd doesn't error out — we just want to
 	// observe state changes (uploading flag, that an attempt was made).
-	app.SetUploader(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
+	app.setUploaderForTest(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
 		return func() tea.Msg { return UploadResultMsg{Err: nil} }
 	})
 
@@ -2113,7 +2114,7 @@ func TestSubmitWithAttachments_RefusesDuringEdit(t *testing.T) {
 	app.editing.channelID = "C1"
 	app.editing.ts = "1.0"
 	app.editing.panel = PanelMessages
-	app.SetUploader(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
+	app.setUploaderForTest(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
 		return func() tea.Msg { return UploadResultMsg{Err: nil} }
 	})
 
@@ -2206,7 +2207,7 @@ func TestPasteMsg_ImagePresent_AttachesToCompose(t *testing.T) {
 	app.focusedPanel = PanelMessages
 	app.SetMode(ModeInsert)
 	pngBytes := []byte("\x89PNG\r\n\x1a\nfake")
-	app.SetClipboardReader(fakeClipboard(pngBytes, nil))
+	app.setClipboardReaderForTest(fakeClipboard(pngBytes, nil))
 
 	// Bracketed paste typically delivers some text representation;
 	// what it carries doesn't matter once an image is detected on
@@ -2239,7 +2240,8 @@ func TestPasteMsg_FilePathInPayload_AttachesByPath(t *testing.T) {
 	app.focusedPanel = PanelMessages
 	app.SetMode(ModeInsert)
 	// No image on clipboard; bracketed paste delivers the path as text.
-	app.SetClipboardReader(fakeClipboard(nil, nil))
+	app.setClipboardReaderForTest(fakeClipboard(nil, nil))
+	app.setFilesystemForTest()
 
 	app.Update(tea.PasteMsg{Content: path})
 
@@ -2262,7 +2264,7 @@ func TestPasteMsg_PlainText_FallsThroughToTextarea(t *testing.T) {
 	// (textarea ignores input when blurred).
 	_ = app.compose.Focus()
 	// No image, no valid path — bracketed text should land in textarea.
-	app.SetClipboardReader(fakeClipboard(nil, nil))
+	app.setClipboardReaderForTest(fakeClipboard(nil, nil))
 
 	app.Update(tea.PasteMsg{Content: "hello world"})
 
@@ -4485,8 +4487,8 @@ func setupAppForTitleTest(
 		withWorkspaces(workspaces...),
 		withChannels(channels...),
 	)
-	app.SetReadStateReader(func() map[string]cache.ReadState { return channelState })
-	app.SetWorkspaceUnreadReader(func() []string { return workspaceUnreads })
+	app.setReadStateReaderForTest(func() map[string]cache.ReadState { return channelState })
+	app.setWorkspaceUnreadReaderForTest(func() []string { return workspaceUnreads })
 	return app
 }
 

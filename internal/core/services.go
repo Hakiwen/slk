@@ -13,8 +13,11 @@ package core
 
 import (
 	"context"
+	"image"
+	"io/fs"
 
 	"github.com/gammons/slk/internal/ids"
+	imgpkg "github.com/gammons/slk/internal/image"
 )
 
 // ReactionService is the App's interface to the Slack reaction API
@@ -560,7 +563,287 @@ func (s searchAdapter) SearchWorkspace(query string) Msg {
 	return s.fns.SearchWorkspace(query)
 }
 
-// Closure types accepted by the constructors above.
+// FileService moves files between the user and Slack.
+type FileService interface {
+	// Upload sends attachments to channelID (threadTS for a thread
+	// reply); caption goes on the last one. The returned Cmd yields
+	// UploadResultMsg; progress arrives separately as UploadProgressMsg.
+	Upload(channelID, threadTS, caption string, attachments []PendingAttachment) Cmd
+
+	// Download saves the auth-gated file at url locally and returns its
+	// path. name is the file's display name.
+	Download(ctx context.Context, url, name string) (string, error)
+}
+
+// NewFileService builds a FileService from closures.
+func NewFileService(
+	upload func(channelID, threadTS, caption string, attachments []PendingAttachment) Cmd,
+	download func(ctx context.Context, url, name string) (string, error),
+) FileService {
+	return fileAdapter{upload: upload, download: download}
+}
+
+type fileAdapter struct {
+	upload   func(channelID, threadTS, caption string, attachments []PendingAttachment) Cmd
+	download func(ctx context.Context, url, name string) (string, error)
+}
+
+func (f fileAdapter) Upload(channelID, threadTS, caption string, attachments []PendingAttachment) Cmd {
+	if f.upload == nil {
+		return nil
+	}
+	return f.upload(channelID, threadTS, caption, attachments)
+}
+
+func (f fileAdapter) Download(ctx context.Context, url, name string) (string, error) {
+	if f.download == nil {
+		return "", nil
+	}
+	return f.download(ctx, url, name)
+}
+
+// ClipboardFormat selects what DesktopService.ReadClipboard returns.
+type ClipboardFormat int
+
+const (
+	ClipboardText ClipboardFormat = iota
+	ClipboardImage
+)
+
+// DesktopService is the host OS: launching apps, the system clipboard,
+// the filesystem, and the external status command.
+type DesktopService interface {
+	// Open hands target (a URL or file path) to the OS default handler.
+	Open(target string) error
+
+	// ReadClipboard returns the clipboard contents in format f, or nil.
+	ReadClipboard(f ClipboardFormat) []byte
+
+	// Stat describes the file at path.
+	Stat(path string) (fs.FileInfo, error)
+
+	// SaveThread writes the thread as Markdown to the export directory
+	// and returns the file's path.
+	SaveThread(parent MessageItem, replies []MessageItem, userNames, channelNames map[string]string, channelName string) (string, error)
+
+	// ReportStatus mirrors the unread state onto the user's configured
+	// status command, if any.
+	ReportStatus(unread, otherUnread int, workspace, title string)
+}
+
+// DesktopServiceFuncs is the closure bundle accepted by
+// NewDesktopService. Any field may be nil; that operation no-ops, and a
+// nil Stat reports every path as missing.
+type DesktopServiceFuncs struct {
+	Open          func(target string) error
+	ReadClipboard func(f ClipboardFormat) []byte
+	Stat          func(path string) (fs.FileInfo, error)
+	SaveThread    func(parent MessageItem, replies []MessageItem, userNames, channelNames map[string]string, channelName string) (string, error)
+	ReportStatus  func(unread, otherUnread int, workspace, title string)
+}
+
+// NewDesktopService builds a DesktopService from a DesktopServiceFuncs bundle.
+func NewDesktopService(fns DesktopServiceFuncs) DesktopService {
+	return desktopAdapter{fns: fns}
+}
+
+type desktopAdapter struct{ fns DesktopServiceFuncs }
+
+func (d desktopAdapter) Open(target string) error {
+	if d.fns.Open == nil {
+		return nil
+	}
+	return d.fns.Open(target)
+}
+
+func (d desktopAdapter) ReadClipboard(f ClipboardFormat) []byte {
+	if d.fns.ReadClipboard == nil {
+		return nil
+	}
+	return d.fns.ReadClipboard(f)
+}
+
+func (d desktopAdapter) Stat(path string) (fs.FileInfo, error) {
+	// Not (nil, nil): callers read info whenever err is nil.
+	if d.fns.Stat == nil {
+		return nil, fs.ErrNotExist
+	}
+	return d.fns.Stat(path)
+}
+
+func (d desktopAdapter) SaveThread(parent MessageItem, replies []MessageItem, userNames, channelNames map[string]string, channelName string) (string, error) {
+	if d.fns.SaveThread == nil {
+		return "", nil
+	}
+	return d.fns.SaveThread(parent, replies, userNames, channelNames, channelName)
+}
+
+func (d desktopAdapter) ReportStatus(unread, otherUnread int, workspace, title string) {
+	if d.fns.ReportStatus == nil {
+		return
+	}
+	d.fns.ReportStatus(unread, otherUnread, workspace, title)
+}
+
+// PresenceService sets the user's own status and broadcasts typing.
+type PresenceService interface {
+	// SetStatus applies a presence-menu choice; snoozeMinutes is set
+	// for PresenceSnooze.
+	SetStatus(action PresenceAction, snoozeMinutes int)
+
+	// SendTyping broadcasts a typing indicator for channelID. Called off
+	// the Update goroutine.
+	SendTyping(channelID string)
+}
+
+// NewPresenceService builds a PresenceService from closures.
+func NewPresenceService(
+	setStatus func(action PresenceAction, snoozeMinutes int),
+	sendTyping func(channelID string),
+) PresenceService {
+	return presenceAdapter{setStatus: setStatus, sendTyping: sendTyping}
+}
+
+type presenceAdapter struct {
+	setStatus  func(action PresenceAction, snoozeMinutes int)
+	sendTyping func(channelID string)
+}
+
+func (p presenceAdapter) SetStatus(action PresenceAction, snoozeMinutes int) {
+	if p.setStatus != nil {
+		p.setStatus(action, snoozeMinutes)
+	}
+}
+
+func (p presenceAdapter) SendTyping(channelID string) {
+	if p.sendTyping != nil {
+		p.sendTyping(channelID)
+	}
+}
+
+// SettingsService persists the user's display preferences.
+type SettingsService interface {
+	SaveTheme(name string, scope ThemeScope)
+	SaveSidebarWidth(width int)
+}
+
+// NewSettingsService builds a SettingsService from closures.
+func NewSettingsService(
+	saveTheme func(name string, scope ThemeScope),
+	saveSidebarWidth func(width int),
+) SettingsService {
+	return settingsAdapter{saveTheme: saveTheme, saveSidebarWidth: saveSidebarWidth}
+}
+
+type settingsAdapter struct {
+	saveTheme        func(name string, scope ThemeScope)
+	saveSidebarWidth func(width int)
+}
+
+func (s settingsAdapter) SaveTheme(name string, scope ThemeScope) {
+	if s.saveTheme != nil {
+		s.saveTheme(name, scope)
+	}
+}
+
+func (s settingsAdapter) SaveSidebarWidth(width int) {
+	if s.saveSidebarWidth != nil {
+		s.saveSidebarWidth(width)
+	}
+}
+
+// UnreadService reads the unread state the sidebar and workspace rail
+// render. Both methods are local reads, called at render time.
+type UnreadService interface {
+	// ChannelReadStates returns the active workspace's per-channel read
+	// state, keyed by channel ID.
+	ChannelReadStates() map[string]ReadState
+
+	// UnreadWorkspaces returns the IDs of workspaces with at least one
+	// channel their sidebar would show as unread.
+	UnreadWorkspaces() []string
+}
+
+// NewUnreadService builds an UnreadService from closures.
+func NewUnreadService(
+	channelReadStates func() map[string]ReadState,
+	unreadWorkspaces func() []string,
+) UnreadService {
+	return unreadAdapter{channelReadStates: channelReadStates, unreadWorkspaces: unreadWorkspaces}
+}
+
+type unreadAdapter struct {
+	channelReadStates func() map[string]ReadState
+	unreadWorkspaces  func() []string
+}
+
+func (u unreadAdapter) ChannelReadStates() map[string]ReadState {
+	if u.channelReadStates == nil {
+		return nil
+	}
+	return u.channelReadStates()
+}
+
+func (u unreadAdapter) UnreadWorkspaces() []string {
+	if u.unreadWorkspaces == nil {
+		return nil
+	}
+	return u.unreadWorkspaces()
+}
+
+// WorkspaceService switches the active workspace.
+type WorkspaceService interface {
+	// Switch makes teamID active and returns WorkspaceSwitchedMsg (or
+	// nil if the workspace isn't connected).
+	Switch(teamID string) Msg
+}
+
+// NewWorkspaceService builds a WorkspaceService from a closure.
+func NewWorkspaceService(switchTo func(teamID string) Msg) WorkspaceService {
+	return workspaceAdapter{switchTo: switchTo}
+}
+
+type workspaceAdapter struct{ switchTo func(teamID string) Msg }
+
+func (w workspaceAdapter) Switch(teamID string) Msg {
+	if w.switchTo == nil {
+		return nil
+	}
+	return w.switchTo(teamID)
+}
+
+// AvatarService renders user avatars for the message panes.
+type AvatarService interface {
+	// Avatar returns the rendered half-block avatar for userID, or ""
+	// while it isn't available yet.
+	Avatar(userID string) string
+}
+
+// NewAvatarService builds an AvatarService from a closure.
+func NewAvatarService(avatar func(userID string) string) AvatarService {
+	return avatarAdapter{avatar: avatar}
+}
+
+type avatarAdapter struct{ avatar func(userID string) string }
+
+func (a avatarAdapter) Avatar(userID string) string {
+	if a.avatar == nil {
+		return ""
+	}
+	return a.avatar(userID)
+}
+
+// ImageFetcher downloads and caches remote images for inline rendering
+// and keeps pre-encoded renders of them. *image.Fetcher implements it.
+type ImageFetcher interface {
+	Fetch(ctx context.Context, req imgpkg.FetchRequest) (imgpkg.FetchResult, error)
+	Cached(key string, target image.Point) (image.Image, bool)
+	Prerendered(key string, cellTarget image.Point, proto imgpkg.Protocol) (imgpkg.Render, bool)
+	ConfigurePrerender(proto imgpkg.Protocol)
+	ConfigurePrerenderKitty(kr *imgpkg.KittyRenderer)
+}
+
+// Closure types accepted by the service constructors.
 
 // ChannelFetchFunc is called when the user selects a channel.
 type ChannelFetchFunc func(channelID ids.ChannelID, channelName string) Msg

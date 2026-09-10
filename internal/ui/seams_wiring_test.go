@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"os"
+
 	tea "charm.land/bubbletea/v2"
-	"golang.design/x/clipboard"
 
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/export"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/presencemenu"
@@ -17,58 +19,65 @@ import (
 // that should.
 
 func wireStatusSetter(a *App, fn func(action presencemenu.Action, mins int)) {
-	a.SetStatusSetter(fn)
+	a.SetPresenceService(core.NewPresenceService(fn, nil))
 }
 
 func wireTypingSender(a *App, fn func(channelID string)) {
-	a.SetTypingSender(fn)
+	a.SetPresenceService(core.NewPresenceService(nil, fn))
 }
 
 func wireThemeSaver(a *App, fn func(name string, scope themeswitcher.ThemeScope)) {
-	a.SetThemeSaver(fn)
+	a.SetSettingsService(core.NewSettingsService(fn, nil))
 }
 
 func wireWidthSaver(a *App, fn func(width int)) {
-	a.SetWidthSaver(fn)
+	a.SetSettingsService(core.NewSettingsService(nil, fn))
 }
 
 func wireUploader(a *App, fn func(channelID, threadTS, caption string, atts []compose.PendingAttachment) tea.Cmd) {
-	a.SetUploader(fn)
+	a.SetFileService(core.NewFileService(func(channelID, threadTS, caption string, atts []core.PendingAttachment) core.Cmd {
+		return coreCmd(fn(channelID, threadTS, caption, atts))
+	}, nil))
 }
 
 func wireWorkspaceSwitcher(a *App, fn func(teamID string) tea.Msg) {
-	a.SetWorkspaceSwitcher(fn)
+	a.SetWorkspaceService(core.NewWorkspaceService(func(teamID string) core.Msg { return fn(teamID) }))
 }
 
 func wireUnreadReaders(a *App, channels func() map[string]cache.ReadState, workspaces func() []string) {
-	a.SetReadStateReader(channels)
-	a.SetWorkspaceUnreadReader(workspaces)
+	a.SetUnreadService(core.NewUnreadService(channels, workspaces))
 }
 
 func wireStatusReporter(a *App, fn func(unread, otherUnread int, workspace, title string)) {
-	a.SetStatusReporter(fn)
+	a.setDesktopForTest(func(d *core.DesktopServiceFuncs) { d.ReportStatus = fn })
 }
 
 func wireAvatars(a *App, fn func(userID string) string) {
-	a.SetAvatarFunc(fn)
+	a.SetAvatarService(core.NewAvatarService(fn))
 }
 
 // wireClipboard makes the clipboard hold text and/or PNG bytes.
 func wireClipboard(a *App, text string, png []byte) {
 	a.SetClipboardAvailable(true)
-	a.SetClipboardReader(func(f clipboard.Format) []byte {
-		if f == clipboard.FmtImage {
-			return png
+	a.setDesktopForTest(func(d *core.DesktopServiceFuncs) {
+		d.ReadClipboard = func(f core.ClipboardFormat) []byte {
+			if f == core.ClipboardImage {
+				return png
+			}
+			return []byte(text)
 		}
-		return []byte(text)
 	})
 }
 
 // wireFilesystem gives the App the real filesystem for paste-a-path.
-func wireFilesystem(a *App) {}
+func wireFilesystem(a *App) {
+	a.setDesktopForTest(func(d *core.DesktopServiceFuncs) { d.Stat = os.Stat })
+}
 
 // wireThreadExport gives the App the real thread exporter.
-func wireThreadExport(a *App) {}
+func wireThreadExport(a *App) {
+	a.setDesktopForTest(func(d *core.DesktopServiceFuncs) { d.SaveThread = export.SaveThread })
+}
 
 // wireEditor gives the App the real external-editor plumbing, launching
 // argv. nil leaves the editor unconfigured.
@@ -100,12 +109,4 @@ func wireThreadMark(a *App, fn func(channelID ids.ChannelID, threadTS ids.Thread
 			return coreCmd(fn(ch, thread, ts))
 		},
 	}))
-}
-
-// coreCmd is teaCmd in reverse, for scenarios written against tea.Cmd.
-func coreCmd(c tea.Cmd) core.Cmd {
-	if c == nil {
-		return nil
-	}
-	return func() core.Msg { return c() }
 }

@@ -3,7 +3,7 @@
 // values they exchange. The TUI depends only on these; cmd/slk wires the
 // implementations, which talk to Slack, SQLite and the OS.
 //
-// core imports nothing that performs I/O.
+// core declares interfaces and values only; it does no I/O itself.
 package core
 
 // Msg is what a service hands back for the TUI to dispatch: one of the

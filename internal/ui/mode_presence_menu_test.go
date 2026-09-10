@@ -21,7 +21,7 @@ func openPresenceMenu(calls *[]statusCall, withSetter bool) func(*testing.T, *Ap
 	return func(t *testing.T, a *App) {
 		*calls = nil
 		if withSetter {
-			a.SetStatusSetter(func(action presencemenu.Action, mins int) {
+			a.setStatusSetterForTest(func(action presencemenu.Action, mins int) {
 				*calls = append(*calls, statusCall{action: action, mins: mins})
 			})
 		}
@@ -117,8 +117,8 @@ func TestPresenceMenuModeKeys(t *testing.T) {
 			key:      keyCode(tea.KeyEnter),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
-				if a.setStatusFn != nil {
-					t.Fatal("precondition: setStatusFn should be nil; the guard is not being exercised")
+				if a.presenceSvc != nil {
+					t.Fatal("precondition: presenceSvc should be nil; the guard is not being exercised")
 				}
 				if a.presenceMenu.IsVisible() {
 					t.Error("menu still visible after enter")
@@ -530,7 +530,7 @@ func assertCommitsTo(t *testing.T, a *App, want presencemenu.Action) {
 	t.Helper()
 	var got presencemenu.Action
 	seen := false
-	a.SetStatusSetter(func(action presencemenu.Action, _ int) {
+	a.setStatusSetterForTest(func(action presencemenu.Action, _ int) {
 		got, seen = action, true
 	})
 	_ = dispatchModeKey(a, keyCode(tea.KeyEnter))
