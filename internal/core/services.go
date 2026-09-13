@@ -13,6 +13,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"image"
 	"io/fs"
 
@@ -683,6 +684,60 @@ func (d desktopAdapter) ReportStatus(unread, otherUnread int, workspace, title s
 		return
 	}
 	d.fns.ReportStatus(unread, otherUnread, workspace, title)
+}
+
+// EditorService runs the user's external editor over a compose draft,
+// handed over in a temp file.
+type EditorService interface {
+	// WriteDraft saves text to a new temp file and returns its path.
+	WriteDraft(text string) (path string, err error)
+
+	// Edit returns a Cmd that suspends the TUI while argv edits path.
+	// done builds the message delivered once the editor exits; its
+	// error has an ExitCode method when the editor ran and exited
+	// non-zero.
+	Edit(argv []string, path string, done func(err error) Msg) Cmd
+
+	// TakeDraft reads the edited draft back and removes the file, even
+	// when the read fails.
+	TakeDraft(path string) (string, error)
+}
+
+// NewEditorService builds an EditorService from closures. A nil
+// writeDraft or takeDraft fails with errors.ErrUnsupported.
+func NewEditorService(
+	writeDraft func(text string) (string, error),
+	edit func(argv []string, path string, done func(err error) Msg) Cmd,
+	takeDraft func(path string) (string, error),
+) EditorService {
+	return editorAdapter{writeDraft: writeDraft, edit: edit, takeDraft: takeDraft}
+}
+
+type editorAdapter struct {
+	writeDraft func(text string) (string, error)
+	edit       func(argv []string, path string, done func(err error) Msg) Cmd
+	takeDraft  func(path string) (string, error)
+}
+
+func (e editorAdapter) WriteDraft(text string) (string, error) {
+	if e.writeDraft == nil {
+		return "", errors.ErrUnsupported
+	}
+	return e.writeDraft(text)
+}
+
+func (e editorAdapter) Edit(argv []string, path string, done func(err error) Msg) Cmd {
+	if e.edit == nil {
+		return nil
+	}
+	return e.edit(argv, path, done)
+}
+
+func (e editorAdapter) TakeDraft(path string) (string, error) {
+	if e.takeDraft == nil {
+		return "", errors.ErrUnsupported
+	}
+	return e.takeDraft(path)
 }
 
 // PresenceService sets the user's own status and broadcasts typing.

@@ -20,14 +20,6 @@ func TestResolveEditor_PrefersVisualOverEditorOverConfig(t *testing.T) {
 	if len(parts) != len(want) || parts[0] != want[0] || parts[1] != want[1] {
 		t.Fatalf("want VISUAL to win with %v, got %v", want, parts)
 	}
-
-	cmd := editorCommand(parts, "/tmp/draft.md")
-	wantArgs := []string{"myvisual", "--flag", "/tmp/draft.md"}
-	for i, w := range wantArgs {
-		if cmd.Args[i] != w {
-			t.Fatalf("want args %v, got %v", wantArgs, cmd.Args)
-		}
-	}
 }
 
 func TestResolveEditor_EditorBeatsConfigWhenVisualUnset(t *testing.T) {
@@ -66,6 +58,7 @@ func TestResolveEditor_NoneConfiguredReturnsNotOk(t *testing.T) {
 
 func TestReduceEditorFinished_LoadsContentIntoChannelCompose(t *testing.T) {
 	a := newTestAppWithMessages(t)
+	a.setEditorForTest()
 	f, err := os.CreateTemp(t.TempDir(), "slk-compose-*.md")
 	if err != nil {
 		t.Fatal(err)
@@ -88,6 +81,7 @@ func TestReduceEditorFinished_LoadsContentIntoChannelCompose(t *testing.T) {
 
 func TestReduceEditorFinished_RoutesToThreadCompose(t *testing.T) {
 	a := newTestAppWithMessages(t)
+	a.setEditorForTest()
 	f, err := os.CreateTemp(t.TempDir(), "slk-compose-*.md")
 	if err != nil {
 		t.Fatal(err)
@@ -110,6 +104,7 @@ func TestReduceEditorFinished_RoutesToThreadCompose(t *testing.T) {
 
 func TestReduceEditorFinished_MissingFileLeavesComposeUntouched(t *testing.T) {
 	a := newTestAppWithMessages(t)
+	a.setEditorForTest()
 	a.compose.SetValue("original draft")
 
 	reduceEditorFinished(a, EditorFinishedMsg{Panel: PanelMessages, Path: "/nonexistent/slk-compose-does-not-exist.md"})
@@ -121,6 +116,7 @@ func TestReduceEditorFinished_MissingFileLeavesComposeUntouched(t *testing.T) {
 
 func TestApp_CtrlEOpensEditorFromInsertMode(t *testing.T) {
 	a := newTestAppWithMessages(t)
+	a.setEditorForTest()
 	a.SetMode(ModeInsert)
 	a.focusedPanel = PanelMessages
 	a.composeEditor = []string{"true"} // Cmd is never invoked, so this never actually runs
@@ -153,6 +149,7 @@ func TestComposeModel_UpdateIgnoresKeysWhileEditingExternally(t *testing.T) {
 
 func TestReduceEditorFinished_ClearsLockAndPlaceholder(t *testing.T) {
 	a := newTestAppWithMessages(t)
+	a.setEditorForTest()
 	a.compose.SetEditingExternally(true)
 	a.compose.SetPlaceholderOverride("Editing in $EDITOR — waiting for it to exit...")
 	f, err := os.CreateTemp(t.TempDir(), "slk-compose-*.md")
@@ -171,6 +168,7 @@ func TestReduceEditorFinished_ClearsLockAndPlaceholder(t *testing.T) {
 
 func TestReduceEditorFinished_LaunchFailureShowsToast(t *testing.T) {
 	a := newTestAppWithMessages(t)
+	a.setEditorForTest()
 	f, err := os.CreateTemp(t.TempDir(), "slk-compose-*.md")
 	if err != nil {
 		t.Fatal(err)
@@ -187,6 +185,7 @@ func TestReduceEditorFinished_LaunchFailureShowsToast(t *testing.T) {
 
 func TestReduceEditorFinished_NonZeroExitDoesNotToast(t *testing.T) {
 	a := newTestAppWithMessages(t)
+	a.setEditorForTest()
 	f, err := os.CreateTemp(t.TempDir(), "slk-compose-*.md")
 	if err != nil {
 		t.Fatal(err)
@@ -227,6 +226,7 @@ func TestApp_CtrlEWithNoEditorConfiguredShowsToast(t *testing.T) {
 // KeyPressMsg before it ever reaches the Ctrl+E check.
 func TestApp_UpdateRoutesCtrlEThroughFullDispatch(t *testing.T) {
 	a := newTestAppWithMessages(t)
+	a.setEditorForTest()
 	a.SetMode(ModeInsert)
 	a.focusedPanel = PanelMessages
 	a.composeEditor = []string{"true"}
@@ -247,6 +247,7 @@ func TestApp_UpdateRoutesCtrlEThroughFullDispatch(t *testing.T) {
 // bare `mod == tea.ModCtrl` comparison.
 func TestApp_CtrlEWorksWithNumLockModifierBit(t *testing.T) {
 	a := newTestAppWithMessages(t)
+	a.setEditorForTest()
 	a.SetMode(ModeInsert)
 	a.focusedPanel = PanelMessages
 	a.composeEditor = []string{"true"}
@@ -258,25 +259,5 @@ func TestApp_CtrlEWorksWithNumLockModifierBit(t *testing.T) {
 	}
 	if !a.compose.EditingExternally() {
 		t.Fatal("want compose locked — the NumLock bit must not defeat the ctrl+e check")
-	}
-}
-
-// TestEditorCommand_UsesRealStdio pins the actual fix for garbled
-// input inside the external editor: Stdin/Stdout/Stderr must be the
-// real *os.File descriptors, not left for tea.ExecProcess to fall back
-// to the Program's own output (a non-*os.File io.Writer, which forces
-// Go's exec package to pipe the child through a copy goroutine instead
-// of a real tty — breaking the editor's own terminal-capability
-// negotiation and mouse parsing).
-func TestEditorCommand_UsesRealStdio(t *testing.T) {
-	cmd := editorCommand([]string{"true"}, "/tmp/draft.md")
-	if cmd.Stdin != os.Stdin {
-		t.Error("want cmd.Stdin == os.Stdin")
-	}
-	if cmd.Stdout != os.Stdout {
-		t.Error("want cmd.Stdout == os.Stdout")
-	}
-	if cmd.Stderr != os.Stderr {
-		t.Error("want cmd.Stderr == os.Stderr")
 	}
 }

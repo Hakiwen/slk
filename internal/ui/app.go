@@ -206,6 +206,10 @@ type App struct {
 	// by ui.ResolveEditor (editor.go). Nil means unconfigured.
 	composeEditor []string
 
+	// editor hands Ctrl+E's draft to composeEditor and back. A no-op
+	// until wired.
+	editor core.EditorService
+
 	// desktop is the host OS: opening links and files, clipboard reads,
 	// paste-a-path stats, thread export and the status command. A no-op
 	// until wired.
@@ -780,6 +784,7 @@ func NewApp() *App {
 		lastChannelByTeam:     map[string]string{},
 		workspaceDomains:      map[string]string{},
 		desktop:               noopDesktopService,
+		editor:                noopEditorService,
 		navHistory:            newNavHistoryStore(),
 		clipboardWrite:        defaultClipboardWriter,
 	}
@@ -2402,6 +2407,15 @@ func (a *App) SetClipboardAvailable(ok bool) {
 // SetComposeEditor sets Ctrl+E's resolved editor argv (see editor.go).
 func (a *App) SetComposeEditor(editor []string) {
 	a.composeEditor = editor
+}
+
+// SetEditorService wires Ctrl+E's temp file and editor process. nil
+// restores the no-op.
+func (a *App) SetEditorService(s core.EditorService) {
+	if s == nil {
+		s = noopEditorService
+	}
+	a.editor = s
 }
 
 // SetDesktopService wires the host OS integration. nil restores the no-op.

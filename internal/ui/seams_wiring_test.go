@@ -83,6 +83,7 @@ func wireThreadExport(a *App) {
 // argv. nil leaves the editor unconfigured.
 func wireEditor(a *App, argv []string) {
 	a.SetComposeEditor(argv)
+	a.setEditorForTest()
 }
 
 func wireChannelFetch(a *App, fn func(channelID ids.ChannelID, channelName string) tea.Msg) {

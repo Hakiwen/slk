@@ -24,6 +24,7 @@ import (
 	"golang.design/x/clipboard"
 
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/editor"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/presencemenu"
@@ -188,6 +189,11 @@ func (a *App) setClipboardReaderForTest(fn func(format clipboard.Format) []byte)
 // setFilesystemForTest lets paste-a-path see real files.
 func (a *App) setFilesystemForTest() {
 	a.setDesktopForTest(func(d *core.DesktopServiceFuncs) { d.Stat = os.Stat })
+}
+
+// setEditorForTest gives Ctrl+E the real temp file and editor process.
+func (a *App) setEditorForTest() {
+	a.SetEditorService(core.NewEditorService(editor.WriteDraft, editor.Edit, editor.TakeDraft))
 }
 
 func (a *App) setStatusReporterForTest(fn func(unread, otherUnread int, workspace, title string)) {
