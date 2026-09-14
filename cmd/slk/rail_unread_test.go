@@ -316,6 +316,18 @@ func TestRailUnreadWorkspaces_Threads(t *testing.T) {
 			want:        nil,
 		},
 		{
+			// #207's membership rule is for channel rows: a channel the
+			// sidebar cannot show has no dot to explain. It does not
+			// apply to threads, because the Threads badge does not
+			// filter on wctx.Channels either; the thread is on screen
+			// in the Threads view whether or not its channel is listed.
+			name:        "thread in a channel absent from the workspace list still lights",
+			lastRead:    "1700000150.000000",
+			latestReply: "1700000200.000000",
+			channels:    []sidebar.ChannelItem{{ID: "C1"}},
+			want:        []string{"T1"},
+		},
+		{
 			// Threads are not subject to channel mute: the muted
 			// channel keeps the channel half dark, the thread lights.
 			name:        "muted unread channel plus unread thread",
