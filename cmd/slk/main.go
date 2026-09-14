@@ -1208,6 +1208,14 @@ func run() error {
 	}
 	app.SetLoadingWorkspaces(wsNames)
 	app.SetWorkspaces(wsItems)
+	// The rail reader asks these workspaces about unread threads: the
+	// configured set, not the connected one, so a workspace still
+	// connecting keeps last session's thread dot the way it keeps its
+	// channel dot.
+	railTeamIDs := make([]string, 0, len(wsItems))
+	for _, it := range wsItems {
+		railTeamIDs = append(railTeamIDs, it.ID)
+	}
 	app.SetTypingEnabled(cfg.Animations.TypingIndicators)
 	app.SetSidebarStaleThreshold(time.Duration(cfg.Sidebar.HideInactiveAfterDays) * 24 * time.Hour)
 	app.SetMouseWheelLines(cfg.Appearance.MouseWheelLines)
@@ -1410,7 +1418,7 @@ func run() error {
 				log.Printf("Warning: UnreadChannels: %v", err)
 				return nil
 			}
-			return railUnreadWorkspaces(unread, router.ByID)
+			return railUnreadWorkspaces(unread, railTeamIDs, router.ByID, railThreadsUnread(db))
 		})
 
 		app.SetChannelService(ui.NewChannelService(ui.ChannelServiceFuncs{
