@@ -229,11 +229,25 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 	case ThreadsListLoadedMsg:
 		if m.TeamID != a.activeTeamID {
+			// The list cannot go on screen: the user has switched
+			// away since the fetch was issued. It is still the tail
+			// of a thread change dispatched while that workspace was
+			// active, the switch did not recompute the rail
+			// (reduceWorkspaceSwitched only swaps the channel list),
+			// and the rail's thread half reads the rows this list was
+			// read from -- so refresh the dot, or the change never
+			// reaches it.
+			a.notifyReadStateChanged()
 			return nil, true
 		}
 		a.threadsView.SetSummaries(m.Summaries)
 		a.threadsView.SetSubscriptionsAvailable(m.SubscriptionsAvailable)
 		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
+		// The badge and the rail's thread half count the same query
+		// (cache.ListSubscribedThreads); recompute the rail at the
+		// moment the badge changes so the two cannot disagree for the
+		// workspace the user is looking at.
+		a.notifyReadStateChanged()
 		if a.view != ViewThreads {
 			return nil, true
 		}

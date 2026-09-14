@@ -3702,6 +3702,20 @@ func (a *App) applyThreadMarkListState(channelID, threadTS, lastRead string) {
 	if a.threadsView.MarkByThreadTSReadAt(channelID, threadTS, lastRead) {
 		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
 	}
+	// The cursor is already in thread_subscriptions -- markThreadRead
+	// writes it before ThreadMarkedLocalMsg, OnThreadMarked before
+	// ThreadMarkedRemoteMsg -- and the rail's thread half reads that
+	// table (railThreadsUnread in cmd/slk), so recompute the rail here,
+	// whether or not the list had a row to settle: after a workspace
+	// switch the list is empty but the cursor still moved.
+	//
+	// This is the one thread mark site that fans out. The optimistic
+	// ones -- MarkSelectedRead on open, the ThreadRepliesLoadedMsg
+	// recompute, applyThreadMarkUnread -- change nothing in the DB at
+	// that moment, so the rail would only re-read the answer it already
+	// shows; the mark they issue, or its thread_marked echo, lands here
+	// and refreshes it then.
+	a.notifyReadStateChanged()
 }
 
 // applyThreadMarkEcho handles an inbound thread_marked WS event.
