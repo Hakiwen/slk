@@ -9,59 +9,38 @@ import (
 // railUnreadWorkspaces returns the workspace IDs whose rail dot should
 // be lit. It is the reader wireCallbacks installs through
 // App.SetWorkspaceUnreadReader; OtherUnreadCount (the title's "+N" and
-// $SLK_OTHER_UNREAD) reads through the same installed reader, so the
-// three surfaces cannot disagree.
+// $SLK_OTHER_UNREAD) reads through the same reader, so the surfaces
+// cannot disagree.
 //
 // A workspace is lit when its own sidebar would show something unread,
-// and the sidebar has two such signals, so the rail asks both:
+// and the sidebar has two such signals:
 //
-//   - channels: at least one channel in wctx.Channels is
-//     ChannelItem.IsVisiblyUnread (internal/ui/sidebar/model.go), the
-//     one predicate the sidebar dot, UnreadChannelCount and $SLK_UNREAD
-//     already share. That is what keeps a muted channel from lighting
-//     the rail while the sidebar shows nothing unread.
+//   - channels: some channel in wctx.Channels is
+//     ChannelItem.IsVisiblyUnread, the predicate the sidebar dot,
+//     UnreadChannelCount and $SLK_UNREAD share, so a muted channel
+//     never lights the rail.
 //   - threads: threadsUnread(teamID, selfUserID) reports whether
-//     cache.ListSubscribedThreads returns any summary with Unread set,
-//     which is exactly what the sidebar's Threads-row badge counts
-//     (threadsview.Model.UnreadCount). A thread reply never sets the
-//     channel's has_unread (OnMessage, channelEligible), so without
-//     this half a workspace could carry a "•N" badge in its sidebar
-//     and a dark dot in the rail -- the field case, two unread DM
-//     thread replies and no dot. Threads are not subject to channel
-//     mute, and the boot-time counts.threads.has_unreads flag is not
-//     used here: it is stale from the first thread_marked onward,
-//     which is why per-thread last_read replaced it.
+//     cache.ListSubscribedThreads has an Unread row, which is what the
+//     Threads badge counts. A thread reply never sets the channel's
+//     has_unread (OnMessage's channelEligible), so this is the only way
+//     a thread reaches the dot. Channel mute and wctx.Channels
+//     membership do not apply to it, as they do not to the badge.
 //
-// unread is db.UnreadChannels; teamIDs is the configured workspace
-// list (the rail's rows); byID resolves a workspace to its live
-// context and is router.ByID in production; threadsUnread is
-// railThreadsUnread(db). All are parameters so the predicate is pure
-// and testable with neither a router nor a DB, the same reason
-// sidebar.IsStale takes its read state as arguments.
+// In production unread is db.UnreadChannels, teamIDs the configured
+// workspace list, byID router.ByID and threadsUnread
+// railThreadsUnread(db); all are parameters so the predicate is pure.
 //
-// Two edge cases go opposite ways:
+// Two edge cases go opposite ways. byID returning nil (still
+// connecting, or connect failed) lights on any unread channel row, and
+// runs the thread query with an empty self ID so its self-authored
+// suppression cannot fire: nothing to check against, so
+// MuteStore.Ready's conservative default applies and last session's
+// dots survive boot. A channel row whose channel is not in
+// wctx.Channels never lights: the sidebar cannot show it, so there is
+// no row to explain a dot and no keystroke to clear it.
 //
-//   - byID returns nil (the workspace is still connecting, or its
-//     connect failed): any unread channel row lights it, and the thread
-//     query runs with an empty self ID, so its self-authored suppression
-//     cannot fire and any unread thread lights it too. There is no
-//     channel list or user ID to check against, so MuteStore.Ready's
-//     conservative default applies -- a dot we might have suppressed
-//     beats one the user wanted and lost. This also keeps last
-//     session's cached dots visible during boot.
-//   - the row's channel is not in wctx.Channels: it never lights. The
-//     sidebar and the local channel finder are built from that list,
-//     so such a channel has no row on screen to explain a rail dot and
-//     no keystroke to clear it. (The field case was an archived
-//     channel: userBoot lists it, bootConversations drops it,
-//     hydrateFirstSight still caches it, client.counts still reports
-//     it unread.)
-//
-// wctx.Channels is read here on the UI goroutine without
-// synchronization, against writes from the WebSocket handler
-// (refreshMutedForActive, OnConversationOpened). That is how the
-// Lookup callback in wireCallbacks already reads it; this adds a
-// reader, not a convention.
+// wctx.Channels is read on the UI goroutine without synchronization,
+// the way wireCallbacks' Lookup callback already reads it (#208).
 func railUnreadWorkspaces(unread []cache.UnreadChannel, teamIDs []string, byID func(teamID string) *WorkspaceContext, threadsUnread func(teamID, selfUserID string) bool) []string {
 	var out []string
 	lit := map[string]bool{}
