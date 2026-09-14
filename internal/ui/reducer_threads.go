@@ -262,6 +262,15 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// Team check first: a dirty message for another workspace must
 		// not take the coalescing window from the active one.
 		if m.TeamID != a.activeTeamID {
+			// No fetch, the list is not on screen; but the rows the
+			// sender changed are the rows the rail's thread half reads,
+			// and for the subscription reconcile (boot, reconnect,
+			// wake: ensureWorkspaceThreadSubs in cmd/slk) this is the
+			// only signal an inactive workspace gets. It lands after
+			// WorkspaceReadyMsg's refresh, so without this a thread
+			// read elsewhere while slk was closed kept its dot until
+			// an unrelated event.
+			a.notifyReadStateChanged()
 			return nil, true
 		}
 		// Drop it if a refresh is already waiting: that fetch has not

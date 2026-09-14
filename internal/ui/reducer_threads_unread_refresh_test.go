@@ -99,6 +99,26 @@ func TestThreadsListLoaded_InactiveWorkspace_RefreshesRail(t *testing.T) {
 	}
 }
 
+// TestThreadsListDirty_InactiveWorkspace_RefreshesRail pins the other
+// arm that returned before doing anything. The subscription reconcile
+// (boot, reconnect, wake: ensureWorkspaceThreadSubs in cmd/slk) writes
+// last_read and latest_reply for every workspace and signals only
+// ThreadsListDirtyMsg, so for a workspace the user is not looking at
+// this message is the only word that its rows changed -- and it lands
+// after WorkspaceReadyMsg's refresh, so a thread read elsewhere while
+// slk was closed kept its dot until an unrelated event. No fetch may
+// be scheduled: the list is not on screen.
+func TestThreadsListDirty_InactiveWorkspace_RefreshesRail(t *testing.T) {
+	app := railRefreshApp(t)
+	app.Update(ThreadsListDirtyMsg{TeamID: "T2"})
+	if got, want := app.windowTitle, "slk SW"; got != want {
+		t.Errorf("windowTitle = %q want %q: the rail was not recomputed", got, want)
+	}
+	if app.threadsListFetchScheduled {
+		t.Error("threadsListFetchScheduled = true: an inactive workspace's dirty message must not schedule a fetch")
+	}
+}
+
 // TestThreadReply_OnScreenAndFocused_DoesNotRefreshRail pins the one
 // exception, mirrored from the channel arms of reduceNewMessage: a
 // reply the user is looking at in the open thread panel, with the
