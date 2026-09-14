@@ -33,8 +33,9 @@ import (
 // Two edge cases go opposite ways. byID returning nil (still
 // connecting, or connect failed) lights on any unread channel row, and
 // runs the thread query with an empty self ID so its self-authored
-// suppression cannot fire: nothing to check against, so
-// MuteStore.Ready's conservative default applies and last session's
+// suppression cannot fire (cached replies carry a user or bot ID,
+// OnMessage's authorID, so "" matches none): nothing to check against,
+// so MuteStore.Ready's conservative default applies and last session's
 // dots survive boot. A channel row whose channel is not in
 // wctx.Channels never lights: the sidebar cannot show it, so there is
 // no row to explain a dot and no keystroke to clear it.
