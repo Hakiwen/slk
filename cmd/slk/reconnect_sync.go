@@ -37,9 +37,9 @@ type reconnectClient interface {
 	GetUnreadCounts() ([]slackclient.UnreadInfo, slackclient.ThreadsAggregate, error)
 }
 
-// teaSender is the subset of *tea.Program the reconnect path uses to
-// dispatch a refresh into the UI loop. *tea.Program satisfies it
-// implicitly; tests pass a captureSender.
+// teaSender is the subset of *tea.Program the reconnect path and the
+// RTM event handler use to dispatch into the UI loop. *tea.Program
+// satisfies it implicitly; tests pass a captureSender.
 type teaSender interface {
 	Send(msg tea.Msg)
 }
