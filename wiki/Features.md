@@ -68,7 +68,7 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 ## Channels & Workspaces
 
 - Three-panel layout: workspace rail, channel sidebar, message pane
-- Public (`#`), private (`◆`), DM (`●`/`○` for presence), and group DM channels
+- Public (`#`), private (`◆`), DM (`●`/`○` for presence, `⊘` while the other person is in Do Not Disturb), and group DM channels
 - **Slack-native sidebar sections** — slk reads your sections directly from Slack and reflects them live: section names, emoji, linked-list order, and channel/DM membership are kept in sync via the same WebSocket events the official client uses. Reorder, rename, create, or delete sections in any other Slack client; slk catches up within a couple seconds. Read-only: section editing still happens in the official client. Falls back to glob-based config sections when disabled or if the API is unavailable.
 - Collapsible sections — `Enter`/`Space` on a section header toggles it. The default Channels section starts collapsed (`▸ Channels •3` shows aggregate unreads); pinned sections and DMs start expanded
 - Live unread indicators: bold + blue dot for unread channels, muted text for read ones, aggregate dot+count on collapsed section headers
@@ -90,6 +90,8 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 - Standard snooze durations (20m / 1h / 2h / 4h / 8h / 24h / until tomorrow morning) plus custom minutes
 - Live status segment in the status bar with snooze countdown
 - Reflects external state changes — set from the official Slack client or via your own API scripts — in real time over the WebSocket
+- Shows other people's state too: their custom status emoji (🎧 instead while they are in a huddle) follows their name on DM rows, message authors and channel-finder rows, `⊘` replaces the presence dot while they are in DND, and an open DM's header shows the full status text and when their DND ends
+- Statuses and DND disappear when they expire; a huddle is re-checked every minute, because Slack does not always announce that one ended
 
 ## Connectivity
 

@@ -50,6 +50,43 @@ func TestOnConversationOpened_AppendsAndSends(t *testing.T) {
 	}
 }
 
+// TestOnConversationOpened_SeedsDMStatusFromCache: a DM opened mid-session
+// shows its peer's cached status, as DMs seeded at startup do.
+func TestOnConversationOpened_SeedsDMStatusFromCache(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertWorkspace(cache.Workspace{ID: "T1", Name: "T1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertUser(cache.User{ID: "U1", WorkspaceID: "T1", Name: "alice", StatusEmoji: ":calendar:", StatusText: "In a meeting"}); err != nil {
+		t.Fatal(err)
+	}
+	wctx := &WorkspaceContext{
+		BotUserIDs:        map[string]bool{},
+		UserNames:         map[string]string{"U1": "alice"},
+		UserNamesByHandle: map[string]string{},
+	}
+	h := &rtmEventHandler{
+		wsCtx:        wctx,
+		db:           db,
+		workspaceID:  "T1",
+		cfg:          config.Config{},
+		channelNames: map[string]string{},
+		channelTypes: map[string]string{},
+	}
+	h.OnConversationOpened(slack.Channel{
+		GroupConversation: slack.GroupConversation{
+			Conversation: slack.Conversation{ID: "D1", IsIM: true, User: "U1"},
+		},
+	})
+
+	if len(wctx.Channels) != 1 {
+		t.Fatalf("len(Channels) = %d, want 1", len(wctx.Channels))
+	}
+	if got := wctx.Channels[0].Status; got.Emoji != ":calendar:" || got.Text != "In a meeting" {
+		t.Errorf("opened DM status = %+v, want the cached status", got)
+	}
+}
+
 // TestOnConversationOpened_DedupesByID verifies that a re-delivered event for
 // an already-known channel updates the descriptive fields (Name) in place
 // instead of double-adding the row. Same-ID Slack events arrive duplicated

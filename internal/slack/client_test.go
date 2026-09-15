@@ -147,6 +147,7 @@ type mockSlackAPI struct {
 	endSnoozeContextFn              func(ctx context.Context) (*slack.DNDStatus, error)
 	endDNDContextFn                 func(ctx context.Context) error
 	getDNDInfoContextFn             func(ctx context.Context, user *string, options ...slack.ParamOption) (*slack.DNDStatus, error)
+	getDNDTeamInfoContextFn         func(ctx context.Context, users []string, options ...slack.ParamOption) (map[string]slack.DNDStatus, error)
 	uploadFileContextFn             func(ctx context.Context, params slack.UploadFileParameters) (*slack.FileSummary, error)
 	getUsersInConversationContextFn func(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error)
 	openConversationContextFn       func(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error)
@@ -282,6 +283,13 @@ func (m *mockSlackAPI) GetDNDInfoContext(ctx context.Context, user *string, opti
 		return m.getDNDInfoContextFn(ctx, user, options...)
 	}
 	return &slack.DNDStatus{}, nil
+}
+
+func (m *mockSlackAPI) GetDNDTeamInfoContext(ctx context.Context, users []string, options ...slack.ParamOption) (map[string]slack.DNDStatus, error) {
+	if m.getDNDTeamInfoContextFn != nil {
+		return m.getDNDTeamInfoContextFn(ctx, users, options...)
+	}
+	return map[string]slack.DNDStatus{}, nil
 }
 
 func (m *mockSlackAPI) UploadFileContext(ctx context.Context, params slack.UploadFileParameters) (*slack.FileSummary, error) {

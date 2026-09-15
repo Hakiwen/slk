@@ -231,6 +231,10 @@ type WorkspaceContext struct {
 	// fetch; the goroutine emits ui.UserResolvedMsg back into the
 	// program, which patches in-history rows live.
 	UserResolver *userResolver
+	// PeerStatus refetches other users' custom status and DND when the
+	// socket invalidates them. Nil-safe: a nil refresher drops
+	// invalidations.
+	PeerStatus *peerStatusRefresher
 	// Membership owns per-channel member sets for this workspace:
 	// SQLite-backed cache + eager fetch on channel switch + live
 	// member_joined/left WS deltas + external-user resolution. Set
@@ -501,16 +505,32 @@ func (r *userResolver) resolveOne(userID string) {
 	// in the small window before UserResolvedMsg lands.
 	r.avatars.Preload(userID, u.Profile.Image32)
 	_ = r.db.UpsertUser(cache.User{
-		ID:          userID,
-		WorkspaceID: r.teamID,
-		Name:        u.Name,
-		DisplayName: name,
-		AvatarURL:   u.Profile.Image32,
-		Presence:    "away",
-		IsBot:       isBot,
-		IsExternal:  isExternal,
+		ID:               userID,
+		WorkspaceID:      r.teamID,
+		Name:             u.Name,
+		DisplayName:      name,
+		AvatarURL:        u.Profile.Image32,
+		Presence:         "away",
+		IsBot:            isBot,
+		IsExternal:       isExternal,
+		StatusEmoji:      u.Profile.StatusEmoji,
+		StatusText:       u.Profile.StatusText,
+		StatusExpiration: int64(u.Profile.StatusExpiration),
+		HuddleState:      u.Profile.HuddleState,
+		HuddleExpiration: int64(u.Profile.HuddleStateExpirationTS),
 	})
 	if r.send != nil {
+		// Status before UserResolvedMsg, which callers treat as the
+		// end of this user's resolution.
+		r.send(ui.UserStatusChangeMsg{
+			TeamID:        r.teamID,
+			UserID:        userID,
+			Emoji:         u.Profile.StatusEmoji,
+			Text:          u.Profile.StatusText,
+			Expires:       statusExpiry(int64(u.Profile.StatusExpiration)),
+			Huddle:        u.Profile.HuddleState,
+			HuddleExpires: statusExpiry(int64(u.Profile.HuddleStateExpirationTS)),
+		})
 		r.send(ui.UserResolvedMsg{
 			TeamID:      r.teamID,
 			UserID:      userID,
@@ -632,9 +652,8 @@ func (r *userResolver) ResolveNow(ids []string) []edge.User {
 }
 
 // applyEdgeUser records one user the edge batch returned: cache row
-// (created — these are misses), avatar preload, and the same
-// UserResolvedMsg/UserExternalMsg pair the per-user path emits, so
-// the UI cannot tell the two paths apart.
+// (created — these are misses), avatar preload, and the same resolved,
+// status and external messages the per-user path emits.
 func (r *userResolver) applyEdgeUser(u edge.User) {
 	defer r.inflight.Delete(u.ID)
 	name := u.Profile.DisplayName
@@ -647,15 +666,30 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 	isExternal := u.TeamID != "" && u.TeamID != r.teamID
 	r.avatars.Preload(u.ID, u.Profile.ImageOriginal)
 	_ = r.db.UpsertUserFromEdge(r.teamID, cache.EdgeUserUpdate{
-		ID:          u.ID,
-		Name:        u.Name,
-		DisplayName: name,
-		AvatarURL:   u.Profile.ImageOriginal,
-		IsBot:       u.IsBot,
-		IsExternal:  isExternal,
-		Version:     u.Version,
+		ID:               u.ID,
+		Name:             u.Name,
+		DisplayName:      name,
+		AvatarURL:        u.Profile.ImageOriginal,
+		IsBot:            u.IsBot,
+		IsExternal:       isExternal,
+		StatusEmoji:      u.Profile.StatusEmoji,
+		StatusText:       u.Profile.StatusText,
+		StatusExpiration: u.Profile.StatusExpiration,
+		HuddleState:      u.Profile.HuddleState,
+		HuddleExpiration: u.Profile.HuddleStateExpirationTS,
+		Version:          u.Version,
 	})
 	if r.send != nil {
+		// Status before UserResolvedMsg, as in resolveOne.
+		r.send(ui.UserStatusChangeMsg{
+			TeamID:        r.teamID,
+			UserID:        u.ID,
+			Emoji:         u.Profile.StatusEmoji,
+			Text:          u.Profile.StatusText,
+			Expires:       statusExpiry(u.Profile.StatusExpiration),
+			Huddle:        u.Profile.HuddleState,
+			HuddleExpires: statusExpiry(u.Profile.HuddleStateExpirationTS),
+		})
 		r.send(ui.UserResolvedMsg{
 			TeamID:      r.teamID,
 			UserID:      u.ID,
@@ -2026,20 +2060,38 @@ func run() error {
 			}
 		}
 
+		// Statuses are re-read from the cache, which live changes keep
+		// current, rather than the connect-time items. DND is not
+		// cached; RefreshPeerDND below fetches it after the switch
+		// applies, so the switch itself returns without waiting on the
+		// network.
+		statuses := cachedPeerStatuses(db, wctx.TeamID)
+		wctx.PeerStatus.SeedHuddles(statuses)
+		channels := withPeerStatuses(wctx.Channels, statuses)
 		return ui.WorkspaceSwitchedMsg{
 			TeamID:           wctx.TeamID,
 			TeamName:         wctx.TeamName,
 			Domain:           wctx.Client.TeamSubdomain(),
 			Theme:            cfg.ResolveTheme(teamID),
 			SidebarWidth:     cfg.ResolveWidth(teamID),
-			Channels:         wctx.Channels,
+			Channels:         channels,
 			FinderItems:      wctx.FinderItems,
 			UserNames:        wctx.UserNames,
+			UserStatuses:     statuses,
 			ExternalUsers:    external,
 			UserID:           wctx.UserID,
 			CustomEmoji:      wctx.CustomEmoji(),
 			UserGroups:       wctx.UserGroups(),
 			SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
+			// Ordered by reduceWorkspaceSwitched to run after
+			// ResetPresence and the activeTeamID update, so its
+			// UserDNDChangeMsg result isn't wiped or dropped as stale.
+			RefreshPeerDND: func() tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), dndRefreshTimeout)
+				defer cancel()
+				wctx.PeerStatus.RefreshDND(ctx, workspacePresenceIDs(wctx))
+				return nil
+			},
 		}
 	}))
 
@@ -2218,6 +2270,8 @@ func run() error {
 				}
 			}
 
+			readyStatuses := cachedPeerStatuses(db, wctx.TeamID)
+			wctx.PeerStatus.SeedHuddles(readyStatuses)
 			p.Send(ui.WorkspaceReadyMsg{
 				TeamID:           wctx.TeamID,
 				TeamName:         wctx.TeamName,
@@ -2227,6 +2281,7 @@ func run() error {
 				Channels:         wctx.Channels,
 				FinderItems:      wctx.FinderItems,
 				UserNames:        wctx.UserNames,
+				UserStatuses:     readyStatuses,
 				ExternalUsers:    external,
 				UserID:           wctx.UserID,
 				CustomEmoji:      wctx.CustomEmoji(), // bootstrap subset; replaced by the goroutine below
@@ -2481,6 +2536,27 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		wctx.Edge, wctx.EdgeHealth.Degraded,
 	)
 
+	// Refetches other users' custom status and DND on the socket's
+	// ID-only user_invalidated / dnd_invalidated events. known reads the
+	// cache on the WS goroutine, the same read Request makes there.
+	wctx.PeerStatus = newPeerStatusRefresher(
+		wctx.TeamID,
+		wctx.UserID,
+		func(userID string) bool {
+			_, err := db.GetUser(userID)
+			return err == nil
+		},
+		wctx.UserResolver.ResolveNow,
+		wctx.Client.GetDNDTeamInfo,
+		wctx.Client.GetUserProfile,
+		db,
+		func(msg tea.Msg) {
+			if p != nil {
+				p.Send(msg)
+			}
+		},
+	)
+
 	// Per-workspace channel-membership manager. *slackclient.Client
 	// structurally satisfies membership.ConversationMemberAPI; the
 	// user resolver satisfies membership.UserResolver. The push
@@ -2678,10 +2754,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 					UserID:    ch.User,
 				})
 			}
-			if cachedUser, err := db.GetUser(ch.User); err == nil && cachedUser.Presence != "" {
-				item.Presence = cachedUser.Presence
-				finderItem.Presence = cachedUser.Presence
-			}
+			seedDMFromCache(db, ch.User, &item, &finderItem)
 		}
 		wctx.Channels = append(wctx.Channels, item)
 		finderItem.LastVisited = wctx.LastVisitedByChannel[ch.ID]
@@ -2913,7 +2986,7 @@ func resolveUserCached(userID string, userNames map[string]string, db *cache.DB)
 // and return false. Callers that care (the unresolved-DM goroutine)
 // only invoke resolveUser for users not yet in the cache, so the
 // fast-path miss is irrelevant for them.
-func resolveUser(client *slackclient.Client, userID string, userNames map[string]string, db *cache.DB, avatarCache *avatar.Cache) (string, bool) {
+func resolveUser(client *slackclient.Client, userID string, userNames map[string]string, db *cache.DB, avatarCache *avatar.Cache, send func(tea.Msg)) (string, bool) {
 	if name, ok := userNames[userID]; ok {
 		// Check if avatar is also cached
 		if avatarCache.Get(userID) == "" {
@@ -2932,6 +3005,8 @@ func resolveUser(client *slackclient.Client, userID string, userNames map[string
 					IsBot:       isBot,
 					IsExternal:  isExternal,
 				})
+				// UpsertUser doesn't touch status on an existing row.
+				applyProfileStatus(client.TeamID(), userID, u.Profile, db, send)
 				return name, isBot
 			}
 		}
@@ -2960,6 +3035,7 @@ func resolveUser(client *slackclient.Client, userID string, userNames map[string
 			IsBot:       isBot,
 			IsExternal:  isExternal,
 		})
+		applyProfileStatus(client.TeamID(), userID, u.Profile, db, send)
 		return name, isBot
 	}
 	return userID, false
@@ -3017,7 +3093,7 @@ func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Ca
 			// Request's cache-skip gate. Fall through to the per-user
 			// path, which re-fetches and repairs the row.
 		}
-		resolved, isBot := resolveUser(wctx.Client, dm.UserID, wctx.UserNames, db, avatarCache)
+		resolved, isBot := resolveUser(wctx.Client, dm.UserID, wctx.UserNames, db, avatarCache, send)
 		if isBot {
 			wctx.BotUserIDs[dm.UserID] = true
 		}
@@ -4036,26 +4112,10 @@ func bootstrapPresenceAndDND(ctx context.Context, wctx *WorkspaceContext, progra
 		wctx.Presence = p.Presence
 	}
 
-	// Initial DND fetch.
-	//
-	// Slack's dnd_enabled flag means "the user has a DND schedule
-	// configured", NOT "currently in DND". The user is currently in DND
-	// only when (a) a manual snooze is active, or (b) the current time
-	// falls inside the next scheduled window. The same rule lives in
-	// internal/slack/events.go's computeDNDState for the WS event path.
+	// Initial DND fetch. DNDStateFromStatus distinguishes an active
+	// snooze/scheduled window from a merely configured DND schedule.
 	if st, err := wctx.Client.GetDNDInfo(ctx, wctx.UserID); err == nil && st != nil {
-		now := time.Now().Unix()
-		var isDND bool
-		var endUnix int64
-		switch {
-		case st.SnoozeEnabled && int64(st.SnoozeEndTime) > now:
-			isDND = true
-			endUnix = int64(st.SnoozeEndTime)
-		case st.Enabled && int64(st.NextStartTimestamp) > 0 &&
-			int64(st.NextStartTimestamp) <= now && now < int64(st.NextEndTimestamp):
-			isDND = true
-			endUnix = int64(st.NextEndTimestamp)
-		}
+		isDND, endUnix := slackclient.DNDStateFromStatus(*st, time.Now().Unix())
 		wctx.DNDEnabled = isDND
 		if endUnix > 0 {
 			wctx.DNDEndTS = time.Unix(endUnix, 0)
@@ -4063,6 +4123,11 @@ func bootstrapPresenceAndDND(ctx context.Context, wctx *WorkspaceContext, progra
 			wctx.DNDEndTS = time.Time{}
 		}
 	}
+
+	// DM peers' DND, which the sidebar marks. Later changes arrive as
+	// dnd_invalidated and go through the same refresher. Runs on every
+	// connect because the socket does not replay missed invalidations.
+	wctx.PeerStatus.RefreshDND(ctx, workspacePresenceIDs(wctx))
 
 	if program != nil {
 		program.Send(ui.StatusChangeMsg{
@@ -4896,6 +4961,9 @@ func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
 	}
 
 	item, finderItem := buildChannelItem(ch, h.wsCtx, h.cfg, h.workspaceID)
+	if ch.IsIM {
+		seedDMFromCache(h.db, ch.User, &item, &finderItem)
+	}
 	if h.db != nil {
 		upsertChannelInDB(h.db, ch, item.Type, h.workspaceID)
 	}

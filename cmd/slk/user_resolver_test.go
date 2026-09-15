@@ -13,6 +13,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/ui"
 )
@@ -608,4 +609,132 @@ func TestResolveDMNames(t *testing.T) {
 	if n := len(batcher.calls()); n != 1 {
 		t.Errorf("the sweep made %d edge calls; want 1 for any number of DMs", n)
 	}
+}
+
+// TestResolveDMNames_FallbackPersistsStatusAndEmitsMessage: a DM peer
+// edge does not resolve falls back to resolveUser's GetUserProfile
+// call, which persists the fetched status/huddle and emits
+// UserStatusChangeMsg.
+func TestResolveDMNames_FallbackPersistsStatusAndEmitsMessage(t *testing.T) {
+	srv := newFakeSlack(t, map[string]string{
+		"/api/auth.test":  `{"ok":true,"url":"","team":"T1","user":"self","team_id":"T1","user_id":"USELF"}`,
+		"/api/users.info": `{"ok":true,"user":{"id":"U_BOB","name":"bob","team_id":"T1","profile":{"display_name":"Bob","status_emoji":":palm_tree:","status_text":"Vacation","status_expiration":1700003600,"huddle_state":"in_a_huddle","huddle_state_expiration_ts":1700000900}}}`,
+	})
+	client := newTestClient(t, srv.Server)
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	db := newTestDB(t)
+	if err := db.UpsertWorkspace(cache.Workspace{ID: "T1", Name: "T1"}); err != nil {
+		t.Fatal(err)
+	}
+	batcher := &fakeBatcher{} // edge resolves nobody -> resolveDMNames falls back per-user
+	wctx := &WorkspaceContext{
+		TeamID:       "T1",
+		Client:       client,
+		UserNames:    map[string]string{},
+		BotUserIDs:   map[string]bool{},
+		UserResolver: newUserResolver("T1", nil, db, nil, nil, batcher, nil),
+		UnresolvedDMs: []UnresolvedDM{
+			{ChannelID: "D_BOB", UserID: "U_BOB"},
+		},
+	}
+	var mu sync.Mutex
+	var sent []tea.Msg
+	resolveDMNames(wctx, db, nil, func(m tea.Msg) {
+		mu.Lock()
+		sent = append(sent, m)
+		mu.Unlock()
+	})
+
+	u, err := db.GetUser("U_BOB")
+	if err != nil {
+		t.Fatalf("U_BOB not cached by the fallback: %v", err)
+	}
+	if u.StatusEmoji != ":palm_tree:" || u.StatusText != "Vacation" || u.StatusExpiration != 1700003600 ||
+		u.HuddleState != "in_a_huddle" || u.HuddleExpiration != 1700000900 {
+		t.Fatalf("fallback did not persist status/huddle: %+v", u)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var status *ui.UserStatusChangeMsg
+	for _, m := range sent {
+		if s, ok := m.(ui.UserStatusChangeMsg); ok && s.UserID == "U_BOB" {
+			c := s
+			status = &c
+		}
+	}
+	if status == nil {
+		t.Fatal("resolveDMNames fallback did not emit UserStatusChangeMsg for U_BOB")
+	}
+	if status.TeamID != "T1" || status.Emoji != ":palm_tree:" || status.Text != "Vacation" || status.Huddle != "in_a_huddle" {
+		t.Errorf("emitted status = %+v", status)
+	}
+}
+
+func TestUserResolver_FirstSightPerUserDeliversPeerStatus(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U1","name":"alice","team_id":"T1","profile":{"display_name":"Alice","status_emoji":":calendar:","status_text":"In a meeting","status_expiration":1700003600,"huddle_state":"in_a_huddle","huddle_state_expiration_ts":1700000900}}}`))
+	}))
+	defer srv.Close()
+
+	db := newTestDB(t)
+	watch := newResolvedWatch(1, nil)
+	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, nil, nil)
+	r.Request("U1")
+	<-watch.done
+
+	u, err := db.GetUser("U1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.StatusEmoji != ":calendar:" || u.StatusText != "In a meeting" || u.StatusExpiration != 1700003600 ||
+		u.HuddleState != "in_a_huddle" || u.HuddleExpiration != 1700000900 {
+		t.Fatalf("cached first-sight status = %+v", u)
+	}
+	for _, raw := range watch.messages() {
+		if msg, ok := raw.(ui.UserStatusChangeMsg); ok && msg.UserID == "U1" {
+			if msg.TeamID != "T1" || msg.Emoji != ":calendar:" || msg.Huddle != "in_a_huddle" {
+				t.Fatalf("first-sight status message = %+v", msg)
+			}
+			return
+		}
+	}
+	t.Fatal("first-sight users.info resolution emitted no peer status")
+}
+
+func TestUserResolver_FirstSightEdgeDeliversPeerStatus(t *testing.T) {
+	u := edgeUserRecord("U1", "alice", "Alice", "", "T1", 7, false)
+	u.Profile.StatusEmoji = ":palm_tree:"
+	u.Profile.StatusText = "Vacation"
+	u.Profile.StatusExpiration = 1700003600
+	u.Profile.HuddleState = "in_a_huddle"
+	u.Profile.HuddleStateExpirationTS = 1700000900
+
+	db := newTestDB(t)
+	watch := newResolvedWatch(1, nil)
+	r := newUserResolver("T1", nil, db, nil, watch.send, &fakeBatcher{res: []edge.User{u}}, nil)
+	if got := r.ResolveNow([]string{"U1"}); len(got) != 1 {
+		t.Fatalf("ResolveNow returned %d users; want 1", len(got))
+	}
+
+	cached, err := db.GetUser("U1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached.StatusEmoji != ":palm_tree:" || cached.HuddleState != "in_a_huddle" {
+		t.Fatalf("cached edge first-sight status = %+v", cached)
+	}
+	for _, raw := range watch.messages() {
+		if msg, ok := raw.(ui.UserStatusChangeMsg); ok && msg.UserID == "U1" {
+			if msg.TeamID != "T1" || msg.Emoji != ":palm_tree:" || msg.Huddle != "in_a_huddle" {
+				t.Fatalf("edge first-sight status message = %+v", msg)
+			}
+			return
+		}
+	}
+	t.Fatal("first-sight edge resolution emitted no peer status")
 }

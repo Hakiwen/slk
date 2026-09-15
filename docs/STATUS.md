@@ -102,6 +102,7 @@ Last updated: 2026-05-03
 - [x] Public channels (# prefix)
 - [x] Private channels (◆ prefix)
 - [x] DMs with presence indicators (● online, ○ offline)
+- [x] Other people's custom status and huddle indicators on DM rows, message authors, the channel finder and the DM header; DND (⊘) on DM rows, the finder and the DM header
 - [x] Group DMs
 - [x] Slack-native sidebar sections (default): names, emoji, linked-list order, and channel/DM membership read from `users.channelSections.list` and kept live via WebSocket events (`channel_section_upserted`, `channel_section_deleted`, `channel_sections_channels_upserted`, `channel_sections_channels_removed`). Read-only in v1.
 - [x] Config-based channel sections with glob pattern matching (fallback when `use_slack_sections = false` or the API is unreachable)

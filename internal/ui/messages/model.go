@@ -17,6 +17,7 @@ import (
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
+	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/scrollbar"
 	"github.com/gammons/slk/internal/ui/selection"
 	"github.com/gammons/slk/internal/ui/styles"
@@ -186,11 +187,12 @@ type Model struct {
 	channelTopic string
 	channelType  string // "channel", "private", "dm", "group_dm" -- drives header glyph
 	loading      bool
-	spinnerFrame int               // braille-spinner frame index for "Loading messages..." animation
-	avatarFn     AvatarFunc        // optional: returns half-block avatar for a userID
-	userNames    map[string]string // user ID -> display name for mention resolution
-	channelNames map[string]string // channel ID -> name for bare <#CID> resolution
-	userGroups   map[string]string // usergroup ID -> handle for bare subteam resolution
+	spinnerFrame int                          // braille-spinner frame index for "Loading messages..." animation
+	avatarFn     AvatarFunc                   // optional: returns half-block avatar for a userID
+	userNames    map[string]string            // user ID -> display name for mention resolution
+	userStatuses map[string]peerstatus.Status // user ID -> custom status shown after author names
+	channelNames map[string]string            // channel ID -> name for bare <#CID> resolution
+	userGroups   map[string]string            // usergroup ID -> handle for bare subteam resolution
 
 	// searchTerms are folded word-prefix terms of the active in-channel
 	// search; non-empty enables highlight rendering. nil = no search.
@@ -573,6 +575,17 @@ func (m *Model) SetChannel(name, topic string) {
 	}
 	m.channelName = name
 	m.channelTopic = topic
+}
+
+// SetChannelTopic replaces the header's second line without changing
+// the channel. A DM uses it for the peer's status and DND.
+func (m *Model) SetChannelTopic(topic string) {
+	if m.channelTopic == topic {
+		return
+	}
+	m.channelTopic = topic
+	m.chromeCacheValid = false
+	m.dirty()
 }
 
 // SetChannelType sets the channel type used to pick the header glyph
@@ -1335,6 +1348,74 @@ func (m *Model) PatchUserName(userID, displayName string) {
 	m.dirty()
 }
 
+// SetUserStatuses replaces the user ID -> custom status map whose emoji
+// follows author names. The map is copied; later changes go through
+// PatchUserStatus.
+func (m *Model) SetUserStatuses(statuses map[string]peerstatus.Status) {
+	m.userStatuses = make(map[string]peerstatus.Status, len(statuses))
+	for id, st := range statuses {
+		m.userStatuses[id] = st
+	}
+	m.cache = nil
+	m.dirty()
+}
+
+// PatchUserStatus records one user's status, invalidating the render
+// cache only when a message in this pane is theirs. No-op when
+// unchanged.
+func (m *Model) PatchUserStatus(userID string, st peerstatus.Status) {
+	if userID == "" || m.userStatuses[userID] == st {
+		return
+	}
+	if m.userStatuses == nil {
+		m.userStatuses = map[string]peerstatus.Status{}
+	}
+	m.userStatuses[userID] = st
+	if m.hasAuthor(userID) {
+		m.cache = nil
+		m.dirty()
+	}
+}
+
+// ExpireStatuses drops statuses whose deadline has passed and reports
+// whether an author name rendered in this pane changed.
+func (m *Model) ExpireStatuses(now time.Time) bool {
+	changed := false
+	for uid, st := range m.userStatuses {
+		if st.Expired(now) {
+			m.userStatuses[uid] = st.Clear(now)
+			if m.hasAuthor(uid) {
+				changed = true
+			}
+		}
+	}
+	if changed {
+		m.cache = nil
+		m.dirty()
+	}
+	return changed
+}
+
+func (m *Model) hasAuthor(userID string) bool {
+	for i := range m.messages {
+		if m.messages[i].UserID == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// AuthorStatusSuffix is what follows an author's name in a message
+// header: a space and their status emoji on the pane background, or ""
+// when they have no live custom status. Shared with the thread pane.
+func AuthorStatusSuffix(statuses map[string]peerstatus.Status, userID string, now time.Time) string {
+	g := statuses[userID].Glyph(now)
+	if g == "" {
+		return ""
+	}
+	return lipgloss.NewStyle().Background(styles.Background).Render(" " + g)
+}
+
 // SetChannelNames sets the channel ID -> name map used to resolve bare
 // <#CHANNELID> mentions (Slack-side messages from clients that emit
 // channel mentions without the embedded |name).
@@ -1880,7 +1961,7 @@ func (m *Model) blockkitContext(msg MessageItem, userNames, channelNames map[str
 func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string, channelNames map[string]string, isSelected bool, stats *entryPerfStats) (
 	content string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry, hits []entryHit, reactionHits []reactionEntryHit,
 ) {
-	line := styles.Username(msg.UserID, m.coloredUsernames).Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
+	line := styles.Username(msg.UserID, m.coloredUsernames).Render(msg.UserName) + AuthorStatusSuffix(m.userStatuses, msg.UserID, time.Now()) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
 
 	// If we have an avatar, reserve space on the left for it
 	contentWidth := width - 4
