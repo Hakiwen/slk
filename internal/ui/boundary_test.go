@@ -100,7 +100,14 @@ func TestTUIReachesTheAppOnlyThroughCore(t *testing.T) {
 	})
 }
 
-func TestCoreDependsOnNeitherTUINorIO(t *testing.T) {
+// TestCoreDoesNotImportTUIOrDirectIO checks core's ban list, not the
+// stronger claim its old name made. internal/image is a deliberate,
+// documented exemption (see ImageFetcher in ports.go): core.ImageFetcher's
+// vocabulary is built from imgpkg's own types, and internal/image itself
+// reaches net/http and os to fetch and decode images. Add it to the
+// switch below only alongside introducing core-owned equivalents for
+// those types — see ImageFetcher's doc comment for the tradeoff.
+func TestCoreDoesNotImportTUIOrDirectIO(t *testing.T) {
 	walkGoFiles(t, "../core", func(rel string, f *ast.File, _ *token.FileSet) {
 		for _, imp := range f.Imports {
 			path, _ := strconv.Unquote(imp.Path.Value)

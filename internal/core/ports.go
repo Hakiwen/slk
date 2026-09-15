@@ -338,6 +338,15 @@ type AvatarService interface {
 
 // ImageFetcher downloads and caches remote images for inline rendering
 // and keeps pre-encoded renders of them. *image.Fetcher implements it.
+//
+// Deliberate exemption from the boundary internal/ui/boundary_test.go
+// enforces elsewhere: this port's vocabulary
+// (imgpkg.FetchRequest/FetchResult/Protocol/Render/KittyRenderer) is
+// borrowed directly from internal/image rather than mirrored as core
+// types, because internal/image's own protocol-negotiation surface
+// (sixel/Kitty capability detection, incremental decode) would have to
+// be duplicated in core to avoid it. Revisit if that cost stops being
+// worth it — see TestCoreDoesNotImportTUIOrDirectIO.
 type ImageFetcher interface {
 	Fetch(ctx context.Context, req imgpkg.FetchRequest) (imgpkg.FetchResult, error)
 	Cached(key string, target image.Point) (image.Image, bool)
