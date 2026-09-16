@@ -4269,10 +4269,9 @@ type rtmEventHandler struct {
 	// resolveConversation is conversations.info, for discoverConversation.
 	// nil in tests that construct a handler for unrelated events.
 	resolveConversation func(ctx context.Context, channelID string) (*slack.Channel, error)
-	// lookupFailedAt holds each failed discovery lookup, so a busy
-	// channel whose lookup keeps failing costs one request a minute
-	// rather than one per message. WebSocket goroutine only.
-	lookupFailedAt map[string]time.Time
+	// lookupRetryAt holds when a refused or rate-limited discovery
+	// lookup may run again. WebSocket goroutine only.
+	lookupRetryAt map[string]time.Time
 }
 
 const discoveryRetryAfter = time.Minute
@@ -4292,21 +4291,36 @@ func (h *rtmEventHandler) discoverConversation(channelID string) (sidebar.Channe
 	if _, known := h.channelTypes[channelID]; known {
 		return sidebar.ChannelItem{}, false
 	}
-	if time.Since(h.lookupFailedAt[channelID]) < discoveryRetryAfter {
+	if time.Now().Before(h.lookupRetryAt[channelID]) {
 		return sidebar.ChannelItem{}, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	ch, err := h.resolveConversation(ctx, channelID)
 	if err != nil {
-		log.Printf("workspace %s: message on an unknown conversation, retrying in %s: %v", h.workspaceID, discoveryRetryAfter, err)
-		if h.lookupFailedAt == nil {
-			h.lookupFailedAt = map[string]time.Time{}
+		log.Printf("workspace %s: looking up the conversation of an incoming message: %v", h.workspaceID, err)
+		// A refusal or a rate limit will not clear by the next message,
+		// and retrying each one would cost a blocking request per message
+		// on a busy channel. A network error or timeout may clear, and a
+		// quick burst of messages can be the only retry it gets.
+		var rateLimited *slack.RateLimitedError
+		var refused slack.SlackErrorResponse
+		var wait time.Duration
+		switch {
+		case errors.As(err, &rateLimited):
+			wait = rateLimited.RetryAfter
+		case errors.As(err, &refused):
+			wait = discoveryRetryAfter
 		}
-		h.lookupFailedAt[channelID] = time.Now()
+		if wait > 0 {
+			if h.lookupRetryAt == nil {
+				h.lookupRetryAt = map[string]time.Time{}
+			}
+			h.lookupRetryAt[channelID] = time.Now().Add(wait)
+		}
 		return sidebar.ChannelItem{}, false
 	}
-	delete(h.lookupFailedAt, channelID)
+	delete(h.lookupRetryAt, channelID)
 	debuglog.WS("discovered conversation from message: team=%s channel=%s mpim=%v im=%v", h.workspaceID, ch.ID, ch.IsMpIM, ch.IsIM)
 	return h.addConversation(*ch)
 }

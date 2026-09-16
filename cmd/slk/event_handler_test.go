@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"testing"
@@ -424,42 +423,60 @@ func TestOnMessage_UnknownConversation_AddsItUnread(t *testing.T) {
 	}
 }
 
-// A lookup that keeps failing must neither hide the conversation for
-// the session nor cost a request per message.
-func TestOnMessage_UnknownConversation_RetriesFailedLookupAfterBackoff(t *testing.T) {
-	wctx := &WorkspaceContext{
-		BotUserIDs:        map[string]bool{},
-		UserNames:         map[string]string{},
-		UserNamesByHandle: map[string]string{},
-	}
-	lookups := 0
-	h := &rtmEventHandler{
-		wsCtx:        wctx,
-		workspaceID:  "T1",
-		channelNames: map[string]string{},
-		channelTypes: map[string]string{},
-		resolveConversation: func(context.Context, string) (*slack.Channel, error) {
-			lookups++
-			if lookups == 1 {
-				return nil, errors.New("ratelimited")
+// A refusal or rate limit waits instead of costing a request per
+// message; a network error retries on the very next message, which in a
+// short burst may be the only one left.
+func TestOnMessage_UnknownConversation_RetryDependsOnFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		err      error
+		backsOff bool
+	}{
+		{"timeout", context.DeadlineExceeded, false},
+		{"refused", fmt.Errorf("getting conversation D9: %w", slack.SlackErrorResponse{Err: "enterprise_is_restricted"}), true},
+		{"rate limited", fmt.Errorf("getting conversation D9: %w", &slack.RateLimitedError{RetryAfter: 30 * time.Second}), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wctx := &WorkspaceContext{
+				BotUserIDs:        map[string]bool{},
+				UserNames:         map[string]string{},
+				UserNamesByHandle: map[string]string{},
 			}
-			return decodeInfo(t, infoIM), nil
-		},
-	}
-	msg := func(ts string) {
-		h.OnMessage("D9", "U2", ts, "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
-	}
+			lookups := 0
+			h := &rtmEventHandler{
+				wsCtx:        wctx,
+				workspaceID:  "T1",
+				channelNames: map[string]string{},
+				channelTypes: map[string]string{},
+				resolveConversation: func(context.Context, string) (*slack.Channel, error) {
+					lookups++
+					if lookups == 1 {
+						return nil, tc.err
+					}
+					return decodeInfo(t, infoIM), nil
+				},
+			}
+			msg := func(ts string) {
+				h.OnMessage("D9", "U2", ts, "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
+			}
 
-	msg("1.001")
-	msg("1.002")
-	if lookups != 1 || len(wctx.Channels) != 0 {
-		t.Fatalf("within the backoff: lookups = %d, Channels = %+v; want 1 and none", lookups, wctx.Channels)
-	}
-
-	h.lookupFailedAt["D9"] = time.Now().Add(-discoveryRetryAfter)
-	msg("1.003")
-	if lookups != 2 || len(wctx.Channels) != 1 || wctx.Channels[0].Type != "dm" {
-		t.Errorf("after the backoff: lookups = %d, Channels = %+v; want 2 and the DM D9", lookups, wctx.Channels)
+			msg("1.001")
+			msg("1.002")
+			if !tc.backsOff {
+				if lookups != 2 || len(wctx.Channels) != 1 {
+					t.Errorf("lookups = %d, Channels = %d; want 2 and the DM", lookups, len(wctx.Channels))
+				}
+				return
+			}
+			if lookups != 1 || len(wctx.Channels) != 0 {
+				t.Fatalf("within the wait: lookups = %d, Channels = %d; want 1 and none", lookups, len(wctx.Channels))
+			}
+			h.lookupRetryAt["D9"] = time.Now().Add(-time.Second)
+			msg("1.003")
+			if lookups != 2 || len(wctx.Channels) != 1 || wctx.Channels[0].Type != "dm" {
+				t.Errorf("after the wait: lookups = %d, Channels = %+v; want 2 and the DM D9", lookups, wctx.Channels)
+			}
+		})
 	}
 }
 
