@@ -58,6 +58,40 @@ func TestCopyMessage_FromMessagesPane_Y(t *testing.T) {
 	}
 }
 
+// A bot message whose blocks carry its body draws no body row, but y
+// must still copy its text: hiding the fallback is a rendering
+// decision, not a change to what the message's text is.
+func TestCopyMessage_BlockKitBodyStillCopiesText(t *testing.T) {
+	app := NewApp()
+	var copied string
+	app.SetClipboardWriter(func(text string) tea.Cmd {
+		copied = text
+		return nil
+	})
+	app.activeChannelID = "C123"
+	app.focusedPanel = PanelMessages
+	app.messagepane.SetMessages([]messages.MessageItem{{
+		TS:       "1700000002.000300",
+		UserName: "deploybot",
+		Text:     "build #421 green",
+		Blocks: []blockkit.Block{
+			blockkit.SectionBlock{Text: "*rollout*: 100% of shards on v2.4.1"},
+		},
+	}})
+
+	cmd := app.handleNormalMode(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from y key")
+	}
+	msg := cmd()
+	if _, found := drainForCopiedMsg(msg); !found {
+		t.Fatalf("expected statusbar.CopiedMsg in batch, got %#v", msg)
+	}
+	if copied != "build #421 green" {
+		t.Errorf("clipboard = %q, want the message text 'build #421 green'", copied)
+	}
+}
+
 func TestCopyMessage_FromThreadPane(t *testing.T) {
 	app := NewApp()
 	var copied string

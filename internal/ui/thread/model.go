@@ -1917,7 +1917,18 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 		EmojiFlushes: &flushes,
 		Width:        contentWidth,
 	}
-	text := styles.MessageText.Render(messages.WordWrap(messages.RenderSlackMarkdownWith(messages.MessageTextSource(msg), bodyOpts), contentWidth))
+	// Match the main pane: content-bearing blocks suppress the fallback
+	// text and its row. See messages.BlocksCarryBody.
+	hasBody := !messages.BlocksCarryBody(msg)
+	bodySrc := messages.MessageTextSource(msg)
+	if !hasBody {
+		bodySrc = ""
+	}
+	text := styles.MessageText.Render(messages.WordWrap(messages.RenderSlackMarkdownWith(bodySrc, bodyOpts), contentWidth))
+	bodyRow, bodyRows := "", 0
+	if hasBody {
+		bodyRow, bodyRows = "\n"+text, lipgloss.Height(text)
+	}
 
 	// Block Kit blocks + legacy attachments render between the body
 	// text and file attachments, mirroring the main message pane's
@@ -2127,7 +2138,7 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 	var reactionHits []reactionEntryHit
 	if len(pillSpecs) > 0 && reactionLineCount > 0 {
 		const contentColBase = 1 // thick left border occupies col 0 of linesNormal
-		reactionRowBase := 1 + lipgloss.Height(text) + bkLineCount + attachmentLineCount
+		reactionRowBase := 1 + bodyRows + bkLineCount + attachmentLineCount
 		for _, ps := range pillSpecs {
 			row := reactionRowBase + ps.lineIdx
 			reactionHits = append(reactionHits, reactionEntryHit{
@@ -2140,5 +2151,5 @@ func (m *Model) renderThreadMessage(msg messages.MessageItem, width int, userNam
 		}
 	}
 
-	return line + "\n" + text + bkBlock + attachmentLines + reactionLine, flushes, reactionHits
+	return line + bodyRow + bkBlock + attachmentLines + reactionLine, flushes, reactionHits
 }
