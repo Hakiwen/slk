@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -366,19 +369,33 @@ func decodeInfo(t *testing.T, raw string) *slack.Channel {
 	return &ch
 }
 
+type sendFunc func(tea.Msg)
+
+func (f sendFunc) Send(msg tea.Msg) { f(msg) }
+
 // A group DM another user created mid-session: its messages arrived and
 // were cached, but it never got a sidebar row.
 func TestOnMessage_UnknownConversation_AddsItUnread(t *testing.T) {
 	db := newTestDB(t)
-	sender := &captureSender{}
 	wctx := &WorkspaceContext{
 		BotUserIDs:        map[string]bool{},
 		UserNames:         map[string]string{},
 		UserNamesByHandle: map[string]string{},
 	}
+	var sent []string
 	lookups := 0
 	h := &rtmEventHandler{
-		program:         sender,
+		// The sidebar reads read state from the DB as soon as the row
+		// arrives, and hides a never-opened group DM that is not unread.
+		program: sendFunc(func(msg tea.Msg) {
+			switch msg.(type) {
+			case ui.ConversationOpenedMsg:
+				s, _ := db.GetChannelReadState("G9")
+				sent = append(sent, fmt.Sprintf("opened unread=%v", s.HasUnread))
+			case ui.NewMessageMsg:
+				sent = append(sent, "message")
+			}
+		}),
 		db:              db,
 		wsCtx:           wctx,
 		workspaceID:     "T1",
@@ -402,30 +419,14 @@ func TestOnMessage_UnknownConversation_AddsItUnread(t *testing.T) {
 	if len(wctx.Channels) != 1 || wctx.Channels[0].ID != "G9" || wctx.Channels[0].Type != "group_dm" {
 		t.Fatalf("Channels = %+v, want the group DM G9", wctx.Channels)
 	}
-	if s, _ := db.GetChannelReadState("G9"); !s.HasUnread {
-		t.Error("HasUnread = false, want true")
-	}
-	opened, firstMessage := -1, -1
-	for i, msg := range sender.sent {
-		switch msg.(type) {
-		case ui.ConversationOpenedMsg:
-			if opened < 0 {
-				opened = i
-			}
-		case ui.NewMessageMsg:
-			if firstMessage < 0 {
-				firstMessage = i
-			}
-		}
-	}
-	if opened < 0 || firstMessage < 0 || opened > firstMessage {
-		t.Errorf("ConversationOpenedMsg at %d, first NewMessageMsg at %d: the row must reach the sidebar before the message", opened, firstMessage)
+	if want := []string{"opened unread=true", "message", "message"}; !slices.Equal(sent, want) {
+		t.Errorf("sent = %q, want %q", sent, want)
 	}
 }
 
-// A remembered failure would leave the conversation missing for the
-// rest of the session.
-func TestOnMessage_UnknownConversation_RetriesAfterFailedLookup(t *testing.T) {
+// A lookup that keeps failing must neither hide the conversation for
+// the session nor cost a request per message.
+func TestOnMessage_UnknownConversation_RetriesFailedLookupAfterBackoff(t *testing.T) {
 	wctx := &WorkspaceContext{
 		BotUserIDs:        map[string]bool{},
 		UserNames:         map[string]string{},
@@ -440,17 +441,25 @@ func TestOnMessage_UnknownConversation_RetriesAfterFailedLookup(t *testing.T) {
 		resolveConversation: func(context.Context, string) (*slack.Channel, error) {
 			lookups++
 			if lookups == 1 {
-				return nil, errors.New("timeout")
+				return nil, errors.New("ratelimited")
 			}
 			return decodeInfo(t, infoIM), nil
 		},
 	}
+	msg := func(ts string) {
+		h.OnMessage("D9", "U2", ts, "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	}
 
-	h.OnMessage("D9", "U2", "1.001", "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
-	h.OnMessage("D9", "U2", "1.002", "again", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	msg("1.001")
+	msg("1.002")
+	if lookups != 1 || len(wctx.Channels) != 0 {
+		t.Fatalf("within the backoff: lookups = %d, Channels = %+v; want 1 and none", lookups, wctx.Channels)
+	}
 
+	h.lookupFailedAt["D9"] = time.Now().Add(-discoveryRetryAfter)
+	msg("1.003")
 	if lookups != 2 || len(wctx.Channels) != 1 || wctx.Channels[0].Type != "dm" {
-		t.Errorf("lookups = %d, Channels = %+v; want 2 lookups and the DM D9", lookups, wctx.Channels)
+		t.Errorf("after the backoff: lookups = %d, Channels = %+v; want 2 and the DM D9", lookups, wctx.Channels)
 	}
 }
 
