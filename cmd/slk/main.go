@@ -2258,6 +2258,7 @@ func run() error {
 				ensureThreadSubs: func() {
 					ensureWorkspaceThreadSubs(context.Background(), wctx, db, p.Send)
 				},
+				resolveConversation: wctx.Client.GetConversationInfo,
 			}
 			wctx.RTMHandler = handler
 			wctx.ConnMgr = slackclient.NewConnectionManager(wctx.Client, handler)
@@ -4264,6 +4265,38 @@ type rtmEventHandler struct {
 	//
 	// nil in tests that construct a handler for unrelated events.
 	ensureThreadSubs func()
+
+	// resolveConversation is conversations.info, for discoverConversation.
+	// nil in tests that construct a handler for unrelated events.
+	resolveConversation func(ctx context.Context, channelID string) (*slack.Channel, error)
+}
+
+// discoverConversation adds a conversation the first time a message
+// arrives on one slk does not know. The conversation-opened events are
+// not enough: a group DM another user created mid-session delivered its
+// messages here without ever getting a sidebar row. The message is the
+// signal proven to arrive.
+//
+// There is no is_member check: conversations.info omits it for ims, and
+// a delivered message is membership enough. Only a successful lookup is
+// remembered (OnConversationOpened writes channelTypes), so a failed one
+// retries on the next message.
+func (h *rtmEventHandler) discoverConversation(channelID string) {
+	if h.resolveConversation == nil {
+		return
+	}
+	if _, known := h.channelTypes[channelID]; known {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ch, err := h.resolveConversation(ctx, channelID)
+	if err != nil {
+		log.Printf("workspace %s: message on unknown conversation %s, lookup failed (retrying on the next message): %v", h.workspaceID, channelID, err)
+		return
+	}
+	debuglog.WS("discovered conversation from message: team=%s channel=%s mpim=%v im=%v", h.workspaceID, ch.ID, ch.IsMpIM, ch.IsIM)
+	h.OnConversationOpened(*ch)
 }
 
 func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string) {
@@ -4277,6 +4310,9 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 			h.wsCtx.UserResolver.RequestBot(botID, username)
 		}
 	}
+	// Synchronous, so the channel's row and type exist before the unread
+	// write and the UI dispatch below.
+	h.discoverConversation(channelID)
 	// Cache every message to SQLite, regardless of active workspace.
 	// Guard against nil db so handlers constructed in tests (without
 	// real persistence) don't panic.

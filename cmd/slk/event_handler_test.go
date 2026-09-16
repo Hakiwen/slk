@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -343,6 +346,111 @@ func TestOnMessage_ThreadBroadcast_SetsHasUnread(t *testing.T) {
 	s, _ := db.GetChannelReadState("C1")
 	if !s.HasUnread {
 		t.Errorf("HasUnread = false, want true (thread_broadcast bumps channel)")
+	}
+}
+
+// conversations.info results in the shape a live Enterprise Grid
+// workspace returned (IDs and names replaced). The im carries no
+// is_member at all.
+const (
+	infoMPIM = `{"id":"G9","name":"mpdm-alice--bob--carol-1","is_channel":true,"is_group":false,"is_im":false,"is_mpim":true,"is_private":true,"is_archived":false,"is_shared":true,"is_org_shared":true,"is_member":true,"is_open":true,"last_read":"0000000000.000000","context_team_id":"E1","updated":1789571345593}`
+	infoIM   = `{"id":"D9","is_im":true,"user":"U2","is_archived":false,"is_shared":true,"is_org_shared":true,"is_open":true,"last_read":"1787068717.126069","unread_count":0,"context_team_id":"E1","updated":1787068717149}`
+)
+
+func decodeInfo(t *testing.T, raw string) *slack.Channel {
+	t.Helper()
+	var ch slack.Channel
+	if err := json.Unmarshal([]byte(raw), &ch); err != nil {
+		t.Fatal(err)
+	}
+	return &ch
+}
+
+// A group DM another user created mid-session: its messages arrived and
+// were cached, but it never got a sidebar row.
+func TestOnMessage_UnknownConversation_AddsItUnread(t *testing.T) {
+	db := newTestDB(t)
+	sender := &captureSender{}
+	wctx := &WorkspaceContext{
+		BotUserIDs:        map[string]bool{},
+		UserNames:         map[string]string{},
+		UserNamesByHandle: map[string]string{},
+	}
+	lookups := 0
+	h := &rtmEventHandler{
+		program:         sender,
+		db:              db,
+		wsCtx:           wctx,
+		workspaceID:     "T1",
+		currentUserID:   "USELF",
+		isActive:        func() bool { return true },
+		activeChannelID: func() string { return "C1" },
+		channelNames:    map[string]string{},
+		channelTypes:    map[string]string{},
+		resolveConversation: func(context.Context, string) (*slack.Channel, error) {
+			lookups++
+			return decodeInfo(t, infoMPIM), nil
+		},
+	}
+
+	h.OnMessage("G9", "U2", "1.001", "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("G9", "U2", "1.002", "again", "", "", false, nil, slack.Blocks{}, nil, "", "")
+
+	if lookups != 1 {
+		t.Errorf("lookups = %d, want 1", lookups)
+	}
+	if len(wctx.Channels) != 1 || wctx.Channels[0].ID != "G9" || wctx.Channels[0].Type != "group_dm" {
+		t.Fatalf("Channels = %+v, want the group DM G9", wctx.Channels)
+	}
+	if s, _ := db.GetChannelReadState("G9"); !s.HasUnread {
+		t.Error("HasUnread = false, want true")
+	}
+	opened, firstMessage := -1, -1
+	for i, msg := range sender.sent {
+		switch msg.(type) {
+		case ui.ConversationOpenedMsg:
+			if opened < 0 {
+				opened = i
+			}
+		case ui.NewMessageMsg:
+			if firstMessage < 0 {
+				firstMessage = i
+			}
+		}
+	}
+	if opened < 0 || firstMessage < 0 || opened > firstMessage {
+		t.Errorf("ConversationOpenedMsg at %d, first NewMessageMsg at %d: the row must reach the sidebar before the message", opened, firstMessage)
+	}
+}
+
+// A remembered failure would leave the conversation missing for the
+// rest of the session.
+func TestOnMessage_UnknownConversation_RetriesAfterFailedLookup(t *testing.T) {
+	wctx := &WorkspaceContext{
+		BotUserIDs:        map[string]bool{},
+		UserNames:         map[string]string{},
+		UserNamesByHandle: map[string]string{},
+	}
+	lookups := 0
+	h := &rtmEventHandler{
+		wsCtx:        wctx,
+		workspaceID:  "T1",
+		channelNames: map[string]string{},
+		channelTypes: map[string]string{},
+		resolveConversation: func(context.Context, string) (*slack.Channel, error) {
+			lookups++
+			if lookups == 1 {
+				return nil, errors.New("timeout")
+			}
+			return decodeInfo(t, infoIM), nil
+		},
+	}
+
+	h.OnMessage("D9", "U2", "1.001", "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("D9", "U2", "1.002", "again", "", "", false, nil, slack.Blocks{}, nil, "", "")
+
+	if lookups != 2 || len(wctx.Channels) != 1 || wctx.Channels[0].Type != "dm" {
+		t.Errorf("lookups = %d, Channels = %+v; want 2 lookups and the DM D9", lookups, wctx.Channels)
 	}
 }
 
