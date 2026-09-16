@@ -8,7 +8,7 @@ import (
 
 // railUnreadWorkspaces returns the workspace IDs whose rail dot should
 // be lit. It is the reader wireCallbacks installs through
-// App.SetWorkspaceUnreadReader; OtherUnreadCount (the title's "+N" and
+// App.SetUnreadService; OtherUnreadCount (the title's "+N" and
 // $SLK_OTHER_UNREAD) reads through the same reader, so the surfaces
 // cannot disagree.
 //

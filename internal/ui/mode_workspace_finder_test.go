@@ -78,7 +78,7 @@ func workspaceFinderOpts() []testOpt {
 type switchedTeamMsg struct{ teamID string }
 
 func openWorkspaceFinder(t *testing.T, a *App) {
-	a.SetWorkspaceSwitcher(func(teamID string) tea.Msg {
+	a.setWorkspaceSwitcherForTest(func(teamID string) tea.Msg {
 		return switchedTeamMsg{teamID: teamID}
 	})
 	a.workspaceFinder.Open()
@@ -159,8 +159,8 @@ func TestWorkspaceFinderModeKeys(t *testing.T) {
 			setup: func(t *testing.T, a *App) {
 				a.workspaceFinder.Open()
 				moveFinderDown(t, a, "beta")
-				if a.workspaceSwitcher != nil {
-					t.Fatal("precondition: workspaceSwitcher should be nil")
+				if a.workspaceSvc != nil {
+					t.Fatal("precondition: workspaceSvc should be nil")
 				}
 			},
 			key:      keyCode(tea.KeyEnter),

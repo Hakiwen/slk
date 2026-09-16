@@ -161,11 +161,11 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		var cmd tea.Cmd
 		if channelID != "" && m.ThreadTS != "" {
-			cmd = a.threads.Mark(
+			cmd = teaCmd(a.threads.Mark(
 				ids.ChannelID(channelID),
 				ids.ThreadTS(m.ThreadTS),
 				ids.MessageTS(latestTS),
-			)
+			))
 			if cmd != nil {
 				// Record BEFORE the cmd runs, i.e. before the mark is
 				// issued: Slack's thread_marked broadcast races the

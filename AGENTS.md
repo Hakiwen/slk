@@ -35,6 +35,8 @@ libraries. White-box (`package ui`, not `package ui_test`) by convention.
 ```
 cmd/slk/                composition root: wiring, workspace connection,
                         WebSocket event handling, message fetch/cache pipeline
+internal/core/          the ports (service interfaces) the TUI calls, and the
+                        values the TUI and cmd/slk exchange through them
 internal/ui/            bubbletea App: reducers, mode key handlers, view regions
 internal/ui/<widget>/   self-contained sub-models (messages, thread, sidebar,
                         compose, and 13 modal packages)
@@ -56,10 +58,12 @@ that no longer exists. Do not trust it.** Current structural documentation:
 
 ### Invariants worth knowing
 
-- **`internal/ui` must not import networking.** No `internal/slack`, no
-  `slackhttp`, no `net/http`, no `slack-go`. All I/O crosses through the five
-  service interfaces in `internal/ui/services.go`. This boundary is deliberate;
-  do not breach it.
+- **`internal/ui` does no I/O of its own.** Slack, SQLite, the filesystem, the
+  clipboard, the external editor and launching apps all go through the service
+  ports in `internal/core`, which `cmd/slk` wires. No `internal/slack`,
+  `slackhttp`, `cache`, `config`, `filedl`, `export`, `editor`, `net/http` or
+  `os/exec`; `slack-go` only in `blockkit`, as the data it renders. `internal/ui/boundary_test.go`
+  enforces this. The boundary is deliberate; do not breach it.
 - **`App.Update` routes through a reducer chain**, not a switch. Add behavior by
   adding to a `reducer_*.go` file, not by extending `Update`.
 - **Per-mode key handling is a table**, `modeHandlers` in
@@ -88,6 +92,8 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | mpdm channel name → human name | `slackfmt.FormatMPDMName` |
 | Slack permalink parsing | `slackurl.Parse` |
 | Emoji shortcode → glyph | `emoji.Sprint`, `emoji.CodeMap`, `emoji.StripSkinTone` |
+| Current DND state from a Slack API result | `slack.DNDStateFromStatus` |
+| Peer custom status, DND and huddle rendering | `ui/peerstatus` (`Status`, glyph/expiry/summary methods); `messages.AuthorStatusSuffix` for author headers |
 | Usergroup map helpers | `usergroups.Copy`, `usergroups.Equal`, `usergroups.Display` |
 
 ### UI chrome
@@ -122,6 +128,7 @@ greppable by name; no line numbers, because these files move.
 | Compare or bless a full-screen frame against `testdata/golden/<name>.ansi` | `compareGolden(t, name, got)` (`internal/ui/golden_test.go`) |
 | Re-bless goldens | the package-local `-update` flag: `go test ./internal/ui -run TestGolden -update`. It is not defined repo-wide, so `go test ./... -update` fails |
 | An `App` with every render nondeterminism pinned (theme, emoji mode, clock) | `newGoldenApp(t, opts...)`, with `goldenMessages()` / `goldenChannels()` as the fixtures |
+| Fake one service method on an `App` | `a.setChannelFetcherForTest(fn)` and its siblings, `setUploaderForTest`, `setClipboardReaderForTest`, `setReadStateReaderForTest`, `setDesktopForTest(func(*core.DesktopServiceFuncs))`, `setFilesystemForTest()`, `setEditorForTest()` (`internal/ui/services_helpers_test.go`). Calls for sibling methods of one service compose instead of replacing each other |
 | Table-drive a mode handler's keys | `runKeyCases(t, mode, []keyCase{...})` (`internal/ui/modekeys_test.go`). Calls `dispatchModeKey` directly, so it **bypasses** the reducer chain and the `ctrl+c` / bootstrap / scroll-flush gates ahead of it |
 | Build a key message for such a table | `keyPress(r)` printable rune, `keyCode(c)` special key, `keyMod(c, mod)` modified key |
 | Count the rows a finder-style modal is showing | `modalRows(bs)` (`internal/ui/mode_workspace_finder_test.go`) — `h - 7`; floors at 1, and is **not** valid for `newmessagepicker` |

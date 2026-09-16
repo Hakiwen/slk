@@ -27,7 +27,9 @@ func railRefreshApp(t *testing.T) *App {
 		nil,
 	)
 	unreads := []string{"T2"}
-	app.SetWorkspaceUnreadReader(func() []string { return unreads })
+	// #219 renamed App.SetWorkspaceUnreadReader to SetUnreadService; the
+	// rail reader is the part this test exercises, so install it directly.
+	app.workspaceRail.SetUnreadReader(func() []string { return unreads })
 	app.activeTeamID = "T1"
 	app.notifyReadStateChanged()
 	if got, want := app.windowTitle, "slk SW +1"; got != want {

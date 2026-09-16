@@ -11,84 +11,30 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
+	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/scrollbar"
 	"github.com/gammons/slk/internal/ui/selection"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/usergroups"
 )
 
-type MessageItem struct {
-	TS          string
-	UserName    string
-	UserID      string
-	Text        string
-	Timestamp   string // formatted display time (e.g. "3:04 PM")
-	DateStr     string // date string for grouping (e.g. "2026-04-23")
-	ThreadTS    string
-	ReplyCount  int
-	Reactions   []ReactionItem
-	Attachments []Attachment
-	IsEdited    bool
-	// Subtype mirrors Slack's `subtype` field on a message event.
-	// Currently we only act on "thread_broadcast" (a thread reply that
-	// was also sent to the channel) so we can render a label above it.
-	Subtype string
-
-	// Blocks holds parsed Slack Block Kit blocks. Rendered between
-	// the body Text and the file Attachments by Phase 5.
-	Blocks []blockkit.Block
-
-	// LegacyAttachments holds parsed entries from the legacy
-	// `attachments` field (color stripe + title + fields style bot
-	// cards). Rendered after Blocks.
-	LegacyAttachments []blockkit.LegacyAttachment
-}
-
-// Attachment represents a file or image attached to a message.
-// Kind is "image" for image/* mimetypes, "file" otherwise.
-// URL is the user-facing permalink (preferred) or fallback to url_private.
-type Attachment struct {
-	Kind string // "image" or "file"
-	Name string // display filename / title
-	URL  string // permalink (preferred) or url_private
-
-	// DownloadURL is the auth-gated url_private, used by the `d`
-	// download keybinding. Size is the file size in bytes (0 when
-	// Slack didn't provide one); shown in the file picker.
-	DownloadURL string
-	Size        int64
-
-	// Populated only for Kind == "image":
-	FileID string      // Slack file ID for cache key
-	Mime   string      // e.g. "image/png"
-	Thumbs []ThumbSpec // sorted ascending; empty for non-image
-}
-
-// ThumbSpec is one Slack thumbnail variant.
-//
-// This is intentionally distinct from image.ThumbSpec in the internal/image
-// package to avoid coupling the messages UI package to the image package's
-// internal type. A converter helper bridges the two where needed.
-type ThumbSpec struct {
-	URL string
-	W   int
-	H   int
-}
+// The message data types live in internal/core so the engine can build
+// them without importing the TUI.
+type (
+	MessageItem  = core.MessageItem
+	Attachment   = core.Attachment
+	ThumbSpec    = core.ThumbSpec
+	ReactionItem = core.ReactionItem
+)
 
 // AvatarFunc returns the rendered half-block avatar for a user ID, or empty string.
 type AvatarFunc func(userID string) string
-
-type ReactionItem struct {
-	Emoji      string // emoji name without colons, e.g. "thumbsup"
-	Count      int
-	HasReacted bool     // whether the current user has reacted with this emoji
-	UserIDs    []string // user IDs who reacted with this emoji
-}
 
 // viewEntry is a pre-rendered row in the message list (message or date separator).
 //
@@ -241,11 +187,12 @@ type Model struct {
 	channelTopic string
 	channelType  string // "channel", "private", "dm", "group_dm" -- drives header glyph
 	loading      bool
-	spinnerFrame int               // braille-spinner frame index for "Loading messages..." animation
-	avatarFn     AvatarFunc        // optional: returns half-block avatar for a userID
-	userNames    map[string]string // user ID -> display name for mention resolution
-	channelNames map[string]string // channel ID -> name for bare <#CID> resolution
-	userGroups   map[string]string // usergroup ID -> handle for bare subteam resolution
+	spinnerFrame int                          // braille-spinner frame index for "Loading messages..." animation
+	avatarFn     AvatarFunc                   // optional: returns half-block avatar for a userID
+	userNames    map[string]string            // user ID -> display name for mention resolution
+	userStatuses map[string]peerstatus.Status // user ID -> custom status shown after author names
+	channelNames map[string]string            // channel ID -> name for bare <#CID> resolution
+	userGroups   map[string]string            // usergroup ID -> handle for bare subteam resolution
 
 	// searchTerms are folded word-prefix terms of the active in-channel
 	// search; non-empty enables highlight rendering. nil = no search.
@@ -628,6 +575,17 @@ func (m *Model) SetChannel(name, topic string) {
 	}
 	m.channelName = name
 	m.channelTopic = topic
+}
+
+// SetChannelTopic replaces the header's second line without changing
+// the channel. A DM uses it for the peer's status and DND.
+func (m *Model) SetChannelTopic(topic string) {
+	if m.channelTopic == topic {
+		return
+	}
+	m.channelTopic = topic
+	m.chromeCacheValid = false
+	m.dirty()
 }
 
 // SetChannelType sets the channel type used to pick the header glyph
@@ -1390,6 +1348,74 @@ func (m *Model) PatchUserName(userID, displayName string) {
 	m.dirty()
 }
 
+// SetUserStatuses replaces the user ID -> custom status map whose emoji
+// follows author names. The map is copied; later changes go through
+// PatchUserStatus.
+func (m *Model) SetUserStatuses(statuses map[string]peerstatus.Status) {
+	m.userStatuses = make(map[string]peerstatus.Status, len(statuses))
+	for id, st := range statuses {
+		m.userStatuses[id] = st
+	}
+	m.cache = nil
+	m.dirty()
+}
+
+// PatchUserStatus records one user's status, invalidating the render
+// cache only when a message in this pane is theirs. No-op when
+// unchanged.
+func (m *Model) PatchUserStatus(userID string, st peerstatus.Status) {
+	if userID == "" || m.userStatuses[userID] == st {
+		return
+	}
+	if m.userStatuses == nil {
+		m.userStatuses = map[string]peerstatus.Status{}
+	}
+	m.userStatuses[userID] = st
+	if m.hasAuthor(userID) {
+		m.cache = nil
+		m.dirty()
+	}
+}
+
+// ExpireStatuses drops statuses whose deadline has passed and reports
+// whether an author name rendered in this pane changed.
+func (m *Model) ExpireStatuses(now time.Time) bool {
+	changed := false
+	for uid, st := range m.userStatuses {
+		if st.Expired(now) {
+			m.userStatuses[uid] = st.Clear(now)
+			if m.hasAuthor(uid) {
+				changed = true
+			}
+		}
+	}
+	if changed {
+		m.cache = nil
+		m.dirty()
+	}
+	return changed
+}
+
+func (m *Model) hasAuthor(userID string) bool {
+	for i := range m.messages {
+		if m.messages[i].UserID == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// AuthorStatusSuffix is what follows an author's name in a message
+// header: a space and their status emoji on the pane background, or ""
+// when they have no live custom status. Shared with the thread pane.
+func AuthorStatusSuffix(statuses map[string]peerstatus.Status, userID string, now time.Time) string {
+	g := statuses[userID].Glyph(now)
+	if g == "" {
+		return ""
+	}
+	return lipgloss.NewStyle().Background(styles.Background).Render(" " + g)
+}
+
 // SetChannelNames sets the channel ID -> name map used to resolve bare
 // <#CHANNELID> mentions (Slack-side messages from clients that emit
 // channel mentions without the embedded |name).
@@ -1935,7 +1961,7 @@ func (m *Model) blockkitContext(msg MessageItem, userNames, channelNames map[str
 func (m *Model) renderMessagePlain(msg MessageItem, width int, avatarStr string, userNames map[string]string, channelNames map[string]string, isSelected bool, stats *entryPerfStats) (
 	content string, flushes []func(io.Writer) error, sixelRows map[int]sixelEntry, hits []entryHit, reactionHits []reactionEntryHit,
 ) {
-	line := styles.Username(msg.UserID, m.coloredUsernames).Render(msg.UserName) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
+	line := styles.Username(msg.UserID, m.coloredUsernames).Render(msg.UserName) + AuthorStatusSuffix(m.userStatuses, msg.UserID, time.Now()) + lipgloss.NewStyle().Background(styles.Background).Render("  ") + styles.Timestamp.Render(msg.Timestamp)
 
 	// If we have an avatar, reserve space on the left for it
 	contentWidth := width - 4

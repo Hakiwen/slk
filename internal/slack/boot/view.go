@@ -41,6 +41,10 @@ type UserProfile struct {
 	StatusText       string `json:"status_text"`
 	StatusEmoji      string `json:"status_emoji"`
 	StatusExpiration int64  `json:"status_expiration"`
+	// HuddleState is "in_a_huddle" while the user is in a huddle and
+	// "default_unset" otherwise.
+	HuddleState             string `json:"huddle_state"`
+	HuddleStateExpirationTS int64  `json:"huddle_state_expiration_ts"`
 }
 
 // User is one entry in conversations.view's `users` array — the

@@ -24,8 +24,11 @@ import (
 	"github.com/gammons/slk/internal/bootstrap"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
+	"github.com/gammons/slk/internal/editor"
 	emojiwidth "github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/export"
 	"github.com/gammons/slk/internal/filedl"
 	"github.com/gammons/slk/internal/ids"
 	imgpkg "github.com/gammons/slk/internal/image"
@@ -228,6 +231,10 @@ type WorkspaceContext struct {
 	// fetch; the goroutine emits ui.UserResolvedMsg back into the
 	// program, which patches in-history rows live.
 	UserResolver *userResolver
+	// PeerStatus refetches other users' custom status and DND when the
+	// socket invalidates them. Nil-safe: a nil refresher drops
+	// invalidations.
+	PeerStatus *peerStatusRefresher
 	// Membership owns per-channel member sets for this workspace:
 	// SQLite-backed cache + eager fetch on channel switch + live
 	// member_joined/left WS deltas + external-user resolution. Set
@@ -498,16 +505,32 @@ func (r *userResolver) resolveOne(userID string) {
 	// in the small window before UserResolvedMsg lands.
 	r.avatars.Preload(userID, u.Profile.Image32)
 	_ = r.db.UpsertUser(cache.User{
-		ID:          userID,
-		WorkspaceID: r.teamID,
-		Name:        u.Name,
-		DisplayName: name,
-		AvatarURL:   u.Profile.Image32,
-		Presence:    "away",
-		IsBot:       isBot,
-		IsExternal:  isExternal,
+		ID:               userID,
+		WorkspaceID:      r.teamID,
+		Name:             u.Name,
+		DisplayName:      name,
+		AvatarURL:        u.Profile.Image32,
+		Presence:         "away",
+		IsBot:            isBot,
+		IsExternal:       isExternal,
+		StatusEmoji:      u.Profile.StatusEmoji,
+		StatusText:       u.Profile.StatusText,
+		StatusExpiration: int64(u.Profile.StatusExpiration),
+		HuddleState:      u.Profile.HuddleState,
+		HuddleExpiration: int64(u.Profile.HuddleStateExpirationTS),
 	})
 	if r.send != nil {
+		// Status before UserResolvedMsg, which callers treat as the
+		// end of this user's resolution.
+		r.send(ui.UserStatusChangeMsg{
+			TeamID:        r.teamID,
+			UserID:        userID,
+			Emoji:         u.Profile.StatusEmoji,
+			Text:          u.Profile.StatusText,
+			Expires:       statusExpiry(int64(u.Profile.StatusExpiration)),
+			Huddle:        u.Profile.HuddleState,
+			HuddleExpires: statusExpiry(int64(u.Profile.HuddleStateExpirationTS)),
+		})
 		r.send(ui.UserResolvedMsg{
 			TeamID:      r.teamID,
 			UserID:      userID,
@@ -629,9 +652,8 @@ func (r *userResolver) ResolveNow(ids []string) []edge.User {
 }
 
 // applyEdgeUser records one user the edge batch returned: cache row
-// (created — these are misses), avatar preload, and the same
-// UserResolvedMsg/UserExternalMsg pair the per-user path emits, so
-// the UI cannot tell the two paths apart.
+// (created — these are misses), avatar preload, and the same resolved,
+// status and external messages the per-user path emits.
 func (r *userResolver) applyEdgeUser(u edge.User) {
 	defer r.inflight.Delete(u.ID)
 	name := u.Profile.DisplayName
@@ -644,15 +666,30 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 	isExternal := u.TeamID != "" && u.TeamID != r.teamID
 	r.avatars.Preload(u.ID, u.Profile.ImageOriginal)
 	_ = r.db.UpsertUserFromEdge(r.teamID, cache.EdgeUserUpdate{
-		ID:          u.ID,
-		Name:        u.Name,
-		DisplayName: name,
-		AvatarURL:   u.Profile.ImageOriginal,
-		IsBot:       u.IsBot,
-		IsExternal:  isExternal,
-		Version:     u.Version,
+		ID:               u.ID,
+		Name:             u.Name,
+		DisplayName:      name,
+		AvatarURL:        u.Profile.ImageOriginal,
+		IsBot:            u.IsBot,
+		IsExternal:       isExternal,
+		StatusEmoji:      u.Profile.StatusEmoji,
+		StatusText:       u.Profile.StatusText,
+		StatusExpiration: u.Profile.StatusExpiration,
+		HuddleState:      u.Profile.HuddleState,
+		HuddleExpiration: u.Profile.HuddleStateExpirationTS,
+		Version:          u.Version,
 	})
 	if r.send != nil {
+		// Status before UserResolvedMsg, as in resolveOne.
+		r.send(ui.UserStatusChangeMsg{
+			TeamID:        r.teamID,
+			UserID:        u.ID,
+			Emoji:         u.Profile.StatusEmoji,
+			Text:          u.Profile.StatusText,
+			Expires:       statusExpiry(u.Profile.StatusExpiration),
+			Huddle:        u.Profile.HuddleState,
+			HuddleExpires: statusExpiry(u.Profile.HuddleStateExpirationTS),
+		})
 		r.send(ui.UserResolvedMsg{
 			TeamID:      r.teamID,
 			UserID:      u.ID,
@@ -882,7 +919,7 @@ func run() error {
 
 	// Load custom themes and apply the active theme
 	themesDir := filepath.Join(configDir, "themes")
-	styles.LoadCustomThemes(themesDir)
+	styles.LoadCustomThemes(os.DirFS(themesDir))
 	// At startup we apply the global default. The per-workspace theme
 	// for the initial active workspace is then re-applied via
 	// WorkspaceReadyMsg.Theme once that workspace finishes connecting,
@@ -902,8 +939,8 @@ func run() error {
 	// Otherwise (X11 / macOS / Windows) use the native library.
 	clipboardOK := true
 	useWaylandClipboard := false
-	if ui.IsWayland() {
-		if ui.HasWlPaste() {
+	if IsWayland() {
+		if HasWlPaste() {
 			useWaylandClipboard = true
 		} else {
 			log.Printf("Warning: WAYLAND_DISPLAY set but wl-paste not on PATH; install wl-clipboard for paste-to-upload. Ctrl+V image paste disabled.")
@@ -976,16 +1013,23 @@ func run() error {
 	app.SetSixelFrameStore(sixelFrames)
 	app.SetHelpFooter(versionpkg.ModalFooter(version))
 	app.SetClipboardAvailable(clipboardOK)
+	desktop := core.DesktopServiceFuncs{
+		Open:          launchOS,
+		ReadClipboard: nativeClipboardRead,
+		Stat:          os.Stat,
+		SaveThread:    export.SaveThread,
+	}
 	if sr := notify.NewStatusReporter(cfg.Notifications.StatusCommand); sr != nil {
 		// Enqueue never blocks a render: it hands the state to the reporter's
 		// single worker, which serializes runs and coalesces bursts so the
 		// external surface can't end up pinned to a stale count by an
 		// out-of-order subprocess.
-		app.SetStatusReporter(sr.Enqueue)
+		desktop.ReportStatus = sr.Enqueue
 	}
 	if useWaylandClipboard {
-		app.SetClipboardReader(ui.WaylandClipboardReader())
+		desktop.ReadClipboard = WaylandClipboardReader()
 	}
+	app.SetDesktopService(core.NewDesktopService(desktop))
 
 	// Connect to workspaces
 	ctx := context.Background()
@@ -1168,7 +1212,6 @@ func run() error {
 	}
 	app.SetImageContext(buildImgCtx(nil))
 	app.SetImageFetcher(imageFetcher)
-	app.SetFileDownloader(fileDownloader)
 	app.SetImageProtocol(proto)
 
 	// Emoji-image rendering. Active only on kitty (per ImageMode
@@ -1220,6 +1263,7 @@ func run() error {
 	app.SetSidebarStaleThreshold(time.Duration(cfg.Sidebar.HideInactiveAfterDays) * 24 * time.Hour)
 	app.SetMouseWheelLines(cfg.Appearance.MouseWheelLines)
 	app.SetColoredUsernames(cfg.Appearance.ColoredUsernames)
+	app.SetEditorService(core.NewEditorService(editor.WriteDraft, editor.Edit, editor.TakeDraft))
 	if editor, ok := ui.ResolveEditor(cfg.Compose.Editor); ok {
 		app.SetComposeEditor(editor)
 	}
@@ -1258,7 +1302,7 @@ func run() error {
 	// thousands of users) wrote ~100MB of kitty graphics APC escape
 	// data to stdout at startup and produced a multi-minute hang on
 	// terminals that decode kitty graphics (kitty, ghostty).
-	app.SetAvatarFunc(func(userID string) string {
+	app.SetAvatarService(core.NewAvatarService(func(userID string) string {
 		if rendered := avatarCache.Get(userID); rendered != "" {
 			return rendered
 		}
@@ -1276,10 +1320,10 @@ func run() error {
 			}
 		}
 		return ""
-	})
+	}))
 
 	// Wire theme switcher: dispatch to the appropriate saver based on scope.
-	app.SetThemeSaver(func(name string, scope themeswitcher.ThemeScope) {
+	saveTheme := func(name string, scope themeswitcher.ThemeScope) {
 		switch scope {
 		case themeswitcher.ScopeWorkspace:
 			if activeTeamID == "" {
@@ -1318,10 +1362,10 @@ func run() error {
 				log.Printf("save global theme: %v", err)
 			}
 		}
-	})
+	}
 
 	// Wire sidebar width saver: always persist to the active workspace.
-	app.SetWidthSaver(func(width int) {
+	saveSidebarWidth := func(width int) {
 		if activeTeamID == "" {
 			return
 		}
@@ -1346,12 +1390,13 @@ func run() error {
 		if err := saveWorkspaceWidth(configPath, tomlKey, activeTeamID, teamName, width); err != nil {
 			log.Printf("save workspace sidebar width: %v", err)
 		}
-	})
+	}
+	app.SetSettingsService(core.NewSettingsService(saveTheme, saveSidebarWidth))
 
 	// Wire presence/DND status setter. Resolves activeTeamID through
 	// the router at invocation so the closure always targets the
 	// currently-active workspace context.
-	app.SetStatusSetter(func(action presencemenu.Action, snoozeMinutes int) {
+	setStatus := func(action presencemenu.Action, snoozeMinutes int) {
 		wctx := router.ByID(activeTeamID)
 		if wctx == nil || wctx.Client == nil {
 			return
@@ -1387,7 +1432,7 @@ func run() error {
 				p.Send(ui.ToastMsg{Text: "Status change failed: " + err.Error()})
 			}
 		}()
-	})
+	}
 
 	// wireCallbacks installs all App callbacks once at startup. Each
 	// callback reads router.Active() at invocation time, so the
@@ -1399,7 +1444,7 @@ func run() error {
 	// vars BEFORE the `go func()` so they are not affected by a
 	// concurrent router.Set during the goroutine's lifetime.
 	wireCallbacks := func(router *workspaceRouter) {
-		app.SetReadStateReader(func() map[string]cache.ReadState {
+		channelReadStates := func() map[string]cache.ReadState {
 			wctx := router.Active()
 			if wctx == nil {
 				return nil
@@ -1410,18 +1455,19 @@ func run() error {
 				return nil
 			}
 			return state
-		})
+		}
 
-		app.SetWorkspaceUnreadReader(func() []string {
+		unreadWorkspaces := func() []string {
 			unread, err := db.UnreadChannels()
 			if err != nil {
 				log.Printf("Warning: UnreadChannels: %v", err)
 				return nil
 			}
 			return railUnreadWorkspaces(unread, railTeamIDs, router.ByID, railThreadsUnread(db))
-		})
+		}
+		app.SetUnreadService(core.NewUnreadService(channelReadStates, unreadWorkspaces))
 
-		app.SetChannelService(ui.NewChannelService(ui.ChannelServiceFuncs{
+		app.SetChannelService(core.NewChannelService(core.ChannelServiceFuncs{
 			RecordVisit: func(channelID ids.ChannelID) {
 				chIDStr := string(channelID)
 				wctx := router.Active()
@@ -1495,10 +1541,10 @@ func run() error {
 				// off the Update goroutine.
 				wctx.Membership.EnsureFresh(context.Background(), string(channelID))
 			},
-			OpenConversation: func(userIDs []string, requestID uint64) tea.Cmd {
+			OpenConversation: func(userIDs []string, requestID uint64) core.Cmd {
 				wctx := router.Active()
 				if wctx == nil {
-					return func() tea.Msg {
+					return func() core.Msg {
 						return ui.NewMessageFailedMsg{
 							RequestID: requestID,
 							Err:       fmt.Errorf("no active workspace"),
@@ -1506,7 +1552,7 @@ func run() error {
 					}
 				}
 				client := wctx.Client
-				return func() tea.Msg {
+				return func() core.Msg {
 					channelID, alreadyOpen, err := client.OpenConversation(ctx, userIDs)
 					if err != nil {
 						return ui.NewMessageFailedMsg{
@@ -1522,7 +1568,7 @@ func run() error {
 					}
 				}
 			},
-			Fetch: func(channelID ids.ChannelID, channelName string) tea.Msg {
+			Fetch: func(channelID ids.ChannelID, channelName string) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil || wctx.Client == nil {
@@ -1550,7 +1596,7 @@ func run() error {
 					MarkedTS: markedTS,
 				}
 			},
-			MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+			MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 				wctx := router.Active()
 				if wctx == nil || wctx.Client == nil {
 					return nil
@@ -1558,7 +1604,7 @@ func run() error {
 				markChannelReadAsync(ctx, wctx.Client, db, p, string(channelID), string(ts))
 				return nil // ChannelMarkedReadMsg is emitted from inside the goroutine
 			},
-			FetchOlder: func(channelID ids.ChannelID, oldestTS ids.MessageTS) tea.Msg {
+			FetchOlder: func(channelID ids.ChannelID, oldestTS ids.MessageTS) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1571,7 +1617,7 @@ func run() error {
 					Messages:  msgItems,
 				}
 			},
-			FetchAround: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+			FetchAround: func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1583,7 +1629,7 @@ func run() error {
 				}
 				return ui.MessagesAroundLoadedMsg{ChannelID: chIDStr, TargetTS: string(ts), Messages: msgItems}
 			},
-			Join: func(channelID ids.ChannelID, channelName string) tea.Msg {
+			Join: func(channelID ids.ChannelID, channelName string) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1597,8 +1643,8 @@ func run() error {
 			},
 		}))
 
-		app.SetSearchService(ui.NewSearchService(ui.SearchServiceFuncs{
-			SearchChannel: func(channelID ids.ChannelID, query string) tea.Msg {
+		app.SetSearchService(core.NewSearchService(core.SearchServiceFuncs{
+			SearchChannel: func(channelID ids.ChannelID, query string) core.Msg {
 				wctx := router.Active()
 				if wctx == nil {
 					// Returning nil would leave the `/query  …` spinner
@@ -1622,8 +1668,8 @@ func run() error {
 			SearchWorkspace: searchWorkspaceFunc(router, db, tsFormat),
 		}))
 
-		app.SetMessageService(ui.NewMessageService(ui.MessageServiceFuncs{
-			Send: func(channelID ids.ChannelID, text string) tea.Msg {
+		app.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
+			Send: func(channelID ids.ChannelID, text string) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1652,7 +1698,7 @@ func run() error {
 					},
 				}
 			},
-			Edit: func(channelID ids.ChannelID, ts ids.MessageTS, text string) tea.Msg {
+			Edit: func(channelID ids.ChannelID, ts ids.MessageTS, text string) core.Msg {
 				chIDStr, tsStr := string(channelID), string(ts)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1670,7 +1716,7 @@ func run() error {
 				}
 				return ui.MessageEditedMsg{ChannelID: chIDStr, TS: tsStr, Err: err}
 			},
-			Delete: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+			Delete: func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 				chIDStr, tsStr := string(channelID), string(ts)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1684,7 +1730,7 @@ func run() error {
 				}
 				return ui.MessageDeletedMsg{ChannelID: chIDStr, TS: tsStr, Err: err}
 			},
-			MarkUnread: func(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) tea.Msg {
+			MarkUnread: func(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) core.Msg {
 				chIDStr := string(channelID)
 				threadTSStr := string(threadTS)
 				boundaryTSStr := string(boundaryTS)
@@ -1762,8 +1808,8 @@ func run() error {
 			},
 		}))
 
-		app.SetUploader(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
-			return func() tea.Msg {
+		upload := func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) core.Cmd {
+			return func() core.Msg {
 				wctx := router.Active()
 				if wctx == nil {
 					return nil
@@ -1799,10 +1845,11 @@ func run() error {
 				p.Send(ui.UploadProgressMsg{Done: len(attachments), Total: len(attachments)})
 				return ui.UploadResultMsg{Err: nil}
 			}
-		})
+		}
+		app.SetFileService(core.NewFileService(upload, fileDownloader.Download))
 
-		app.SetThreadService(ui.NewThreadService(ui.ThreadServiceFuncs{
-			Fetch: func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+		app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+			Fetch: func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 				chIDStr, threadTSStr := string(channelID), string(threadTS)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1821,7 +1868,7 @@ func run() error {
 				}
 				return loadCachedThreadReplies(db, wctx.Client.UserID(), string(channelID), string(threadTS), wctx.UserNames, tsFormat, router)
 			},
-			Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd {
+			Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) core.Cmd {
 				chIDStr, threadTSStr, tsStr := string(channelID), string(threadTS), string(ts)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1829,7 +1876,7 @@ func run() error {
 				}
 				client := wctx.Client
 				teamID := wctx.TeamID
-				return func() tea.Msg {
+				return func() core.Msg {
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					defer cancel()
 					// markThreadRead persists the cursor only after
@@ -1845,7 +1892,7 @@ func run() error {
 					}
 				}
 			},
-			SendReply: func(channelID ids.ChannelID, threadTS ids.ThreadTS, text string, broadcast bool) tea.Msg {
+			SendReply: func(channelID ids.ChannelID, threadTS ids.ThreadTS, text string, broadcast bool) core.Msg {
 				chIDStr, threadTSStr := string(channelID), string(threadTS)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1886,7 +1933,7 @@ func run() error {
 					},
 				}
 			},
-			ListFetch: func(teamID ids.TeamID) tea.Msg {
+			ListFetch: func(teamID ids.TeamID) core.Msg {
 				teamIDStr := string(teamID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1944,7 +1991,7 @@ func run() error {
 			},
 		}))
 
-		app.SetReactionService(ui.NewReactionService(
+		app.SetReactionService(core.NewReactionService(
 			func(channelID ids.ChannelID, messageTS ids.MessageTS, emojiName string) error {
 				wctx := router.Active()
 				if wctx == nil {
@@ -1982,13 +2029,14 @@ func run() error {
 			},
 		))
 
-		app.SetTypingSender(func(channelID string) {
+		sendTyping := func(channelID string) {
 			wctx := router.Active()
 			if wctx == nil {
 				return
 			}
 			_ = wctx.Client.SendTyping(channelID)
-		})
+		}
+		app.SetPresenceService(core.NewPresenceService(setStatus, sendTyping))
 
 	}
 
@@ -1996,7 +2044,7 @@ func run() error {
 	wireCallbacks(router)
 
 	// Wire workspace switcher
-	app.SetWorkspaceSwitcher(func(teamID string) tea.Msg {
+	app.SetWorkspaceService(core.NewWorkspaceService(func(teamID string) core.Msg {
 		wctx := router.ByID(teamID)
 		if wctx == nil {
 			return nil
@@ -2020,22 +2068,40 @@ func run() error {
 			}
 		}
 
+		// Statuses are re-read from the cache, which live changes keep
+		// current, rather than the connect-time items. DND is not
+		// cached; RefreshPeerDND below fetches it after the switch
+		// applies, so the switch itself returns without waiting on the
+		// network.
+		statuses := cachedPeerStatuses(db, wctx.TeamID)
+		wctx.PeerStatus.SeedHuddles(statuses)
+		channels := withPeerStatuses(wctx.Channels, statuses)
 		return ui.WorkspaceSwitchedMsg{
 			TeamID:           wctx.TeamID,
 			TeamName:         wctx.TeamName,
 			Domain:           wctx.Client.TeamSubdomain(),
 			Theme:            cfg.ResolveTheme(teamID),
 			SidebarWidth:     cfg.ResolveWidth(teamID),
-			Channels:         wctx.Channels,
+			Channels:         channels,
 			FinderItems:      wctx.FinderItems,
 			UserNames:        wctx.UserNames,
+			UserStatuses:     statuses,
 			ExternalUsers:    external,
 			UserID:           wctx.UserID,
 			CustomEmoji:      wctx.CustomEmoji(),
 			UserGroups:       wctx.UserGroups(),
 			SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
+			// Ordered by reduceWorkspaceSwitched to run after
+			// ResetPresence and the activeTeamID update, so its
+			// UserDNDChangeMsg result isn't wiped or dropped as stale.
+			RefreshPeerDND: func() tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), dndRefreshTimeout)
+				defer cancel()
+				wctx.PeerStatus.RefreshDND(ctx, workspacePresenceIDs(wctx))
+				return nil
+			},
 		}
-	})
+	}))
 
 	// Resolve general.default_workspace if set. We honor it only if
 	// the matching token is actually configured; otherwise fall back
@@ -2212,6 +2278,8 @@ func run() error {
 				}
 			}
 
+			readyStatuses := cachedPeerStatuses(db, wctx.TeamID)
+			wctx.PeerStatus.SeedHuddles(readyStatuses)
 			p.Send(ui.WorkspaceReadyMsg{
 				TeamID:           wctx.TeamID,
 				TeamName:         wctx.TeamName,
@@ -2221,6 +2289,7 @@ func run() error {
 				Channels:         wctx.Channels,
 				FinderItems:      wctx.FinderItems,
 				UserNames:        wctx.UserNames,
+				UserStatuses:     readyStatuses,
 				ExternalUsers:    external,
 				UserID:           wctx.UserID,
 				CustomEmoji:      wctx.CustomEmoji(), // bootstrap subset; replaced by the goroutine below
@@ -2475,6 +2544,27 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		wctx.Edge, wctx.EdgeHealth.Degraded,
 	)
 
+	// Refetches other users' custom status and DND on the socket's
+	// ID-only user_invalidated / dnd_invalidated events. known reads the
+	// cache on the WS goroutine, the same read Request makes there.
+	wctx.PeerStatus = newPeerStatusRefresher(
+		wctx.TeamID,
+		wctx.UserID,
+		func(userID string) bool {
+			_, err := db.GetUser(userID)
+			return err == nil
+		},
+		wctx.UserResolver.ResolveNow,
+		wctx.Client.GetDNDTeamInfo,
+		wctx.Client.GetUserProfile,
+		db,
+		func(msg tea.Msg) {
+			if p != nil {
+				p.Send(msg)
+			}
+		},
+	)
+
 	// Per-workspace channel-membership manager. *slackclient.Client
 	// structurally satisfies membership.ConversationMemberAPI; the
 	// user resolver satisfies membership.UserResolver. The push
@@ -2672,10 +2762,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 					UserID:    ch.User,
 				})
 			}
-			if cachedUser, err := db.GetUser(ch.User); err == nil && cachedUser.Presence != "" {
-				item.Presence = cachedUser.Presence
-				finderItem.Presence = cachedUser.Presence
-			}
+			seedDMFromCache(db, ch.User, &item, &finderItem)
 		}
 		wctx.Channels = append(wctx.Channels, item)
 		finderItem.LastVisited = wctx.LastVisitedByChannel[ch.ID]
@@ -2907,7 +2994,7 @@ func resolveUserCached(userID string, userNames map[string]string, db *cache.DB)
 // and return false. Callers that care (the unresolved-DM goroutine)
 // only invoke resolveUser for users not yet in the cache, so the
 // fast-path miss is irrelevant for them.
-func resolveUser(client *slackclient.Client, userID string, userNames map[string]string, db *cache.DB, avatarCache *avatar.Cache) (string, bool) {
+func resolveUser(client *slackclient.Client, userID string, userNames map[string]string, db *cache.DB, avatarCache *avatar.Cache, send func(tea.Msg)) (string, bool) {
 	if name, ok := userNames[userID]; ok {
 		// Check if avatar is also cached
 		if avatarCache.Get(userID) == "" {
@@ -2926,6 +3013,8 @@ func resolveUser(client *slackclient.Client, userID string, userNames map[string
 					IsBot:       isBot,
 					IsExternal:  isExternal,
 				})
+				// UpsertUser doesn't touch status on an existing row.
+				applyProfileStatus(client.TeamID(), userID, u.Profile, db, send)
 				return name, isBot
 			}
 		}
@@ -2954,6 +3043,7 @@ func resolveUser(client *slackclient.Client, userID string, userNames map[string
 			IsBot:       isBot,
 			IsExternal:  isExternal,
 		})
+		applyProfileStatus(client.TeamID(), userID, u.Profile, db, send)
 		return name, isBot
 	}
 	return userID, false
@@ -3011,7 +3101,7 @@ func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Ca
 			// Request's cache-skip gate. Fall through to the per-user
 			// path, which re-fetches and repairs the row.
 		}
-		resolved, isBot := resolveUser(wctx.Client, dm.UserID, wctx.UserNames, db, avatarCache)
+		resolved, isBot := resolveUser(wctx.Client, dm.UserID, wctx.UserNames, db, avatarCache, send)
 		if isBot {
 			wctx.BotUserIDs[dm.UserID] = true
 		}
@@ -3862,8 +3952,8 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 // workspace. Always returns a WorkspaceSearchResultsMsg — a nil msg
 // would leave the ctrl+f modal spinner stuck (the reducer only exits
 // the loading state on a results msg).
-func searchWorkspaceFunc(router *workspaceRouter, db *cache.DB, tsFormat string) func(query string) tea.Msg {
-	return func(query string) tea.Msg {
+func searchWorkspaceFunc(router *workspaceRouter, db *cache.DB, tsFormat string) func(query string) core.Msg {
+	return func(query string) core.Msg {
 		wctx := router.Active()
 		if wctx == nil {
 			return ui.WorkspaceSearchResultsMsg{Query: query, Err: errors.New("no active workspace")}
@@ -4030,26 +4120,10 @@ func bootstrapPresenceAndDND(ctx context.Context, wctx *WorkspaceContext, progra
 		wctx.Presence = p.Presence
 	}
 
-	// Initial DND fetch.
-	//
-	// Slack's dnd_enabled flag means "the user has a DND schedule
-	// configured", NOT "currently in DND". The user is currently in DND
-	// only when (a) a manual snooze is active, or (b) the current time
-	// falls inside the next scheduled window. The same rule lives in
-	// internal/slack/events.go's computeDNDState for the WS event path.
+	// Initial DND fetch. DNDStateFromStatus distinguishes an active
+	// snooze/scheduled window from a merely configured DND schedule.
 	if st, err := wctx.Client.GetDNDInfo(ctx, wctx.UserID); err == nil && st != nil {
-		now := time.Now().Unix()
-		var isDND bool
-		var endUnix int64
-		switch {
-		case st.SnoozeEnabled && int64(st.SnoozeEndTime) > now:
-			isDND = true
-			endUnix = int64(st.SnoozeEndTime)
-		case st.Enabled && int64(st.NextStartTimestamp) > 0 &&
-			int64(st.NextStartTimestamp) <= now && now < int64(st.NextEndTimestamp):
-			isDND = true
-			endUnix = int64(st.NextEndTimestamp)
-		}
+		isDND, endUnix := slackclient.DNDStateFromStatus(*st, time.Now().Unix())
 		wctx.DNDEnabled = isDND
 		if endUnix > 0 {
 			wctx.DNDEndTS = time.Unix(endUnix, 0)
@@ -4057,6 +4131,11 @@ func bootstrapPresenceAndDND(ctx context.Context, wctx *WorkspaceContext, progra
 			wctx.DNDEndTS = time.Time{}
 		}
 	}
+
+	// DM peers' DND, which the sidebar marks. Later changes arrive as
+	// dnd_invalidated and go through the same refresher. Runs on every
+	// connect because the socket does not replay missed invalidations.
+	wctx.PeerStatus.RefreshDND(ctx, workspacePresenceIDs(wctx))
 
 	if program != nil {
 		program.Send(ui.StatusChangeMsg{
@@ -4907,6 +4986,9 @@ func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
 	}
 
 	item, finderItem := buildChannelItem(ch, h.wsCtx, h.cfg, h.workspaceID)
+	if ch.IsIM {
+		seedDMFromCache(h.db, ch.User, &item, &finderItem)
+	}
 	if h.db != nil {
 		upsertChannelInDB(h.db, ch, item.Type, h.workspaceID)
 	}

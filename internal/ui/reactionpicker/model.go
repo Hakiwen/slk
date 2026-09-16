@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/truncate"
 
+	"github.com/gammons/slk/internal/core"
 	slkemoji "github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/text"
@@ -17,10 +18,7 @@ import (
 )
 
 // EmojiEntry represents an emoji with its name and Unicode character.
-type EmojiEntry struct {
-	Name    string // e.g. "thumbsup"
-	Unicode string // e.g. "\U0001f44d"
-}
+type EmojiEntry = core.EmojiEntry
 
 // ReactionResult is returned when the user selects an emoji.
 type ReactionResult struct {

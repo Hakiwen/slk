@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 )
@@ -25,8 +25,8 @@ import (
 func TestApp_WorkspaceReadyAndActivationBothEnsureSubscriptions(t *testing.T) {
 	app := NewApp()
 	ensured := make(chan string, 4)
-	app.SetThreadService(NewThreadService(ThreadServiceFuncs{
-		ListFetch: func(teamID ids.TeamID) tea.Msg {
+	app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+		ListFetch: func(teamID ids.TeamID) core.Msg {
 			return ThreadsListLoadedMsg{TeamID: string(teamID)}
 		},
 		EnsureSubscriptions: func(teamID ids.TeamID) {
@@ -110,10 +110,10 @@ type markSentinelMsg struct{}
 func TestThreadRepliesLoaded_ReturnsMarkCmd(t *testing.T) {
 	app := NewApp()
 	var got []string
-	app.SetThreadService(NewThreadService(ThreadServiceFuncs{
-		Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd {
+	app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+		Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) core.Cmd {
 			got = append(got, string(channelID)+"/"+string(threadTS)+"/"+string(ts))
-			return func() tea.Msg { return markSentinelMsg{} }
+			return func() core.Msg { return markSentinelMsg{} }
 		},
 	}))
 	app.threadVisible = true

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/gammons/slk/internal/core"
 )
 
 func newApp_WithOpenConvCapture(t *testing.T) (*App, *capturedOpenConv) {
@@ -14,8 +15,8 @@ func newApp_WithOpenConvCapture(t *testing.T) (*App, *capturedOpenConv) {
 	// builder set no dimensions.
 	app := newTestApp(t,
 		withSize(0, 0),
-		withChannelService(ChannelServiceFuncs{
-			OpenConversation: func(userIDs []string, requestID uint64) tea.Cmd {
+		withChannelService(core.ChannelServiceFuncs{
+			OpenConversation: func(userIDs []string, requestID uint64) core.Cmd {
 				cap.calls = append(cap.calls, openConvCall{UserIDs: userIDs, RequestID: requestID})
 				return nil // tests synthesize the result message directly
 			},

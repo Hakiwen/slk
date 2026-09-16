@@ -52,6 +52,9 @@ type SlackAPI interface {
 	EndSnoozeContext(ctx context.Context) (*slack.DNDStatus, error)
 	EndDNDContext(ctx context.Context) error
 	GetDNDInfoContext(ctx context.Context, user *string, options ...slack.ParamOption) (*slack.DNDStatus, error)
+	// GetDNDTeamInfoContext is dnd.teamInfo. It is asked only about the
+	// users slk renders a DND marker for, never the whole team.
+	GetDNDTeamInfoContext(ctx context.Context, users []string, options ...slack.ParamOption) (map[string]slack.DNDStatus, error)
 	UploadFileContext(ctx context.Context, params slack.UploadFileParameters) (*slack.FileSummary, error)
 	OpenConversationContext(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error)
 }
@@ -1209,6 +1212,19 @@ func (c *Client) GetDNDInfo(ctx context.Context, userID string) (*slack.DNDStatu
 	st, err := c.api.GetDNDInfoContext(ctx, &u)
 	if err != nil {
 		return nil, fmt.Errorf("getting DND info: %w", err)
+	}
+	return st, nil
+}
+
+// GetDNDTeamInfo fetches DND/snooze status for several users in one
+// dnd.teamInfo call, keyed by user ID. An empty userIDs sends nothing.
+func (c *Client) GetDNDTeamInfo(ctx context.Context, userIDs []string) (map[string]slack.DNDStatus, error) {
+	if len(userIDs) == 0 {
+		return nil, nil
+	}
+	st, err := c.api.GetDNDTeamInfoContext(ctx, userIDs)
+	if err != nil {
+		return nil, fmt.Errorf("getting team DND info: %w", err)
 	}
 	return st, nil
 }

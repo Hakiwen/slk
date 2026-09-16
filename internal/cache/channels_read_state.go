@@ -3,23 +3,12 @@ package cache
 import (
 	"database/sql"
 	"fmt"
+
+	"github.com/gammons/slk/internal/core"
 )
 
-// ReadState captures the per-channel read-state values that drive the
-// unread dot, the mention badge, and the "new messages" line. It is the
-// canonical type for passing read state across package boundaries.
-type ReadState struct {
-	LastReadTS string
-	HasUnread  bool
-	// MentionCount is the number of unread direct mentions: an explicit
-	// @user or an @here/@channel/@everyone broadcast. For DMs and group
-	// DMs (Slack's ims and mpims), client.counts is believed to report
-	// every unread message here, which is what makes the sidebar badge
-	// match the official client without a client-side branch — that
-	// reading is unverified against a live capture; see UnreadInfo's doc
-	// in internal/slack/client.go. Rendering gates it on HasUnread.
-	MentionCount int
-}
+// ReadState is defined in internal/core, which the TUI shares.
+type ReadState = core.ReadState
 
 // ChannelReadStateUpdate is one entry in a batched read-state write.
 // LastReadTS == "" means "preserve the existing last_read_ts" (used by

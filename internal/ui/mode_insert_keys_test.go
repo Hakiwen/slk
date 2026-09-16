@@ -588,7 +588,7 @@ func TestInsertModeKeys(t *testing.T) {
 			setup: func(t *testing.T, a *App) {
 				typeInto(t, &a.compose, "draft ")
 				a.clipboardAvailable = true
-				a.SetClipboardReader(func(f clipboard.Format) []byte {
+				a.setClipboardReaderForTest(func(f clipboard.Format) []byte {
 					if f == clipboard.FmtText {
 						return []byte("pasted")
 					}
@@ -614,7 +614,7 @@ func TestInsertModeKeys(t *testing.T) {
 				typeInto(t, &a.threadCompose, "reply ")
 				typeInto(t, &a.compose, "draft ")
 				a.clipboardAvailable = true
-				a.SetClipboardReader(func(f clipboard.Format) []byte {
+				a.setClipboardReaderForTest(func(f clipboard.Format) []byte {
 					if f == clipboard.FmtText {
 						return []byte("pasted")
 					}

@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/newmessagepicker"
 )
 
@@ -30,10 +31,10 @@ func newMessageUsers() []newmessagepicker.User {
 }
 
 func newMessageOpts() []testOpt {
-	return []testOpt{withChannelService(ChannelServiceFuncs{
-		OpenConversation: func(userIDs []string, requestID uint64) tea.Cmd {
+	return []testOpt{withChannelService(core.ChannelServiceFuncs{
+		OpenConversation: func(userIDs []string, requestID uint64) core.Cmd {
 			ids := append([]string(nil), userIDs...)
-			return func() tea.Msg {
+			return func() core.Msg {
 				return openedConversationMsg{userIDs: ids, reqID: requestID}
 			}
 		},
