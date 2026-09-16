@@ -3,6 +3,9 @@ package channelfinder
 import (
 	"strings"
 	"testing"
+
+	"github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/ui/peerstatus"
 )
 
 func testItems() []Item {
@@ -17,6 +20,78 @@ func testItems() []Item {
 		{ID: "C4", Name: "grant-planning", Type: "private", LastVisited: 300},
 		{ID: "D1", Name: "Alice", Type: "dm", Presence: "active", LastVisited: 200},
 		{ID: "D2", Name: "Bob", Type: "dm", Presence: "away", LastVisited: 100},
+	}
+}
+
+func TestViewShowsPeerStatusAndDND(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{{
+		ID: "D1", Name: "Alice", Type: "dm", Joined: true, Presence: "active",
+	}})
+	m.SetStatus("D1", peerstatus.Status{Emoji: ":calendar:", DND: true})
+	m.Open()
+
+	got := m.View(80)
+	if !strings.Contains(got, peerstatus.DNDGlyph) {
+		t.Fatalf("finder row does not replace presence with DND:\n%s", got)
+	}
+	if !strings.Contains(got, "Alice "+emoji.CodeMap()[":calendar:"]) {
+		t.Fatalf("finder row does not show the custom status:\n%s", got)
+	}
+
+	m.SetStatus("D1", peerstatus.Status{Huddle: peerstatus.HuddleActive})
+	if got := m.View(80); !strings.Contains(got, "Alice "+peerstatus.HuddleGlyph) {
+		t.Fatalf("finder row does not show the huddle glyph:\n%s", got)
+	}
+}
+
+// TestRenderBoxTruncatesNameNotGlyph: a long name at a narrow width
+// truncates the name, not the status glyph.
+func TestRenderBoxTruncatesNameNotGlyph(t *testing.T) {
+	m := New()
+	longName := strings.Repeat("averylongdisplaynameforadirectmessage", 3)
+	m.SetItems([]Item{{ID: "D1", Name: longName, Type: "dm", Joined: true, Presence: "active"}})
+	m.SetStatus("D1", peerstatus.Status{Emoji: ":calendar:"})
+	m.Open()
+
+	got := m.View(40) // narrow terminal, forces truncation
+	glyph := emoji.CodeMap()[":calendar:"]
+	if !strings.Contains(got, glyph) {
+		t.Fatalf("a long name at a narrow width dropped the status glyph:\n%s", got)
+	}
+	if !strings.Contains(got, "…") {
+		t.Fatalf("expected the long name itself to be truncated:\n%s", got)
+	}
+}
+
+// TestStatusSurvivesSetItemsWithinWorkspace: a SetItems call that keeps
+// the same channel IDs (e.g. a sections refresh) must not lose their
+// statuses.
+func TestStatusSurvivesSetItemsWithinWorkspace(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{{ID: "D1", Name: "Alice", Type: "dm", Joined: true}})
+	m.SetStatus("D1", peerstatus.Status{Emoji: ":calendar:"})
+
+	m.SetItems([]Item{
+		{ID: "D1", Name: "Alice", Type: "dm", Joined: true},
+		{ID: "C1", Name: "general", Type: "channel", Joined: true},
+	})
+
+	if got := m.StatusFor("D1"); got.Emoji != ":calendar:" {
+		t.Fatalf("status did not survive a same-workspace SetItems: %+v", got)
+	}
+}
+
+// TestSetItemsDropsStatusesForRemovedRows: a SetItems call that drops a
+// channel ID must also drop its status, not keep it around indefinitely.
+func TestSetItemsDropsStatusesForRemovedRows(t *testing.T) {
+	m := New()
+	m.SetItems([]Item{{ID: "D1", Name: "Alice", Type: "dm", Joined: true}})
+	m.SetStatus("D1", peerstatus.Status{Emoji: ":calendar:"})
+
+	m.SetItems([]Item{{ID: "D9", Name: "Bob", Type: "dm", Joined: true}})
+	if got := m.StatusFor("D1"); got != (peerstatus.Status{}) {
+		t.Fatalf("status survived removal of its row: %+v", got)
 	}
 }
 

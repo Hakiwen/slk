@@ -197,7 +197,18 @@ type EdgeUserUpdate struct {
 	AvatarURL  string
 	IsBot      bool
 	IsExternal bool
-	Version    int64
+	// StatusEmoji, StatusText and StatusExpiration are the exception
+	// to "absent means preserve": users/info carries the status keys
+	// with empty values when no status is set, so empty here means the
+	// status was cleared, and it is always written.
+	StatusEmoji      string
+	StatusText       string
+	StatusExpiration int64
+	// HuddleState and HuddleExpiration follow the status fields'
+	// contract: always present on users/info, so always written.
+	HuddleState      string
+	HuddleExpiration int64
+	Version          int64
 }
 
 // UpdateUserFromEdge applies a revalidation result, touching only the
@@ -211,15 +222,23 @@ func (db *DB) UpdateUserFromEdge(u EdgeUserUpdate) error {
 	if u.AvatarURL != "" {
 		_, err = db.conn.Exec(`
 			UPDATE users
-			SET name = ?, display_name = ?, avatar_url = ?, is_bot = ?, is_external = ?, version = ?
+			SET name = ?, display_name = ?, avatar_url = ?, is_bot = ?, is_external = ?,
+				status_emoji = ?, status_text = ?, status_expiration = ?,
+				huddle_state = ?, huddle_expiration = ?, version = ?
 			WHERE id = ?`,
-			u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), boolToInt(u.IsExternal), u.Version, u.ID)
+			u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), boolToInt(u.IsExternal),
+			u.StatusEmoji, u.StatusText, u.StatusExpiration,
+			u.HuddleState, u.HuddleExpiration, u.Version, u.ID)
 	} else {
 		_, err = db.conn.Exec(`
 			UPDATE users
-			SET name = ?, display_name = ?, is_bot = ?, is_external = ?, version = ?
+			SET name = ?, display_name = ?, is_bot = ?, is_external = ?,
+				status_emoji = ?, status_text = ?, status_expiration = ?,
+				huddle_state = ?, huddle_expiration = ?, version = ?
 			WHERE id = ?`,
-			u.Name, u.DisplayName, boolToInt(u.IsBot), boolToInt(u.IsExternal), u.Version, u.ID)
+			u.Name, u.DisplayName, boolToInt(u.IsBot), boolToInt(u.IsExternal),
+			u.StatusEmoji, u.StatusText, u.StatusExpiration,
+			u.HuddleState, u.HuddleExpiration, u.Version, u.ID)
 	}
 	if err != nil {
 		return fmt.Errorf("updating user %s from edge: %w", u.ID, err)
@@ -243,27 +262,39 @@ func (db *DB) UpsertUserFromEdge(workspaceID string, u EdgeUserUpdate) error {
 	var err error
 	if u.AvatarURL != "" {
 		_, err = db.conn.Exec(`
-			INSERT INTO users (id, workspace_id, name, display_name, avatar_url, is_bot, is_external, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO users (id, workspace_id, name, display_name, avatar_url, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				name=excluded.name,
 				display_name=excluded.display_name,
 				avatar_url=excluded.avatar_url,
 				is_bot=excluded.is_bot,
 				is_external=excluded.is_external,
+				status_emoji=excluded.status_emoji,
+				status_text=excluded.status_text,
+				status_expiration=excluded.status_expiration,
+				huddle_state=excluded.huddle_state,
+				huddle_expiration=excluded.huddle_expiration,
 				version=excluded.version
-		`, u.ID, workspaceID, u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), boolToInt(u.IsExternal), u.Version)
+		`, u.ID, workspaceID, u.Name, u.DisplayName, u.AvatarURL, boolToInt(u.IsBot), boolToInt(u.IsExternal),
+			u.StatusEmoji, u.StatusText, u.StatusExpiration, u.HuddleState, u.HuddleExpiration, u.Version)
 	} else {
 		_, err = db.conn.Exec(`
-			INSERT INTO users (id, workspace_id, name, display_name, is_bot, is_external, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO users (id, workspace_id, name, display_name, is_bot, is_external, status_emoji, status_text, status_expiration, huddle_state, huddle_expiration, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				name=excluded.name,
 				display_name=excluded.display_name,
 				is_bot=excluded.is_bot,
 				is_external=excluded.is_external,
+				status_emoji=excluded.status_emoji,
+				status_text=excluded.status_text,
+				status_expiration=excluded.status_expiration,
+				huddle_state=excluded.huddle_state,
+				huddle_expiration=excluded.huddle_expiration,
 				version=excluded.version
-		`, u.ID, workspaceID, u.Name, u.DisplayName, boolToInt(u.IsBot), boolToInt(u.IsExternal), u.Version)
+		`, u.ID, workspaceID, u.Name, u.DisplayName, boolToInt(u.IsBot), boolToInt(u.IsExternal),
+			u.StatusEmoji, u.StatusText, u.StatusExpiration, u.HuddleState, u.HuddleExpiration, u.Version)
 	}
 	if err != nil {
 		return fmt.Errorf("upserting user %s from edge: %w", u.ID, err)

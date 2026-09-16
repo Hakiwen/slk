@@ -92,6 +92,8 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | mpdm channel name → human name | `slackfmt.FormatMPDMName` |
 | Slack permalink parsing | `slackurl.Parse` |
 | Emoji shortcode → glyph | `emoji.Sprint`, `emoji.CodeMap`, `emoji.StripSkinTone` |
+| Current DND state from a Slack API result | `slack.DNDStateFromStatus` |
+| Peer custom status, DND and huddle rendering | `ui/peerstatus` (`Status`, glyph/expiry/summary methods); `messages.AuthorStatusSuffix` for author headers |
 | Usergroup map helpers | `usergroups.Copy`, `usergroups.Equal`, `usergroups.Display` |
 
 ### UI chrome

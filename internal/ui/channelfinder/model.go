@@ -3,12 +3,14 @@ package channelfinder
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
+	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
 )
@@ -42,6 +44,11 @@ type Model struct {
 	query    string
 	selected int // index into filtered
 	visible  bool
+
+	// statuses holds each DM channel's custom status and DND, keyed by
+	// channel ID (see SetStatus). Pruned to the current item set on
+	// every SetItems.
+	statuses map[string]peerstatus.Status
 }
 
 // New creates a new channel finder.
@@ -56,6 +63,24 @@ func New() Model {
 func (m *Model) SetItems(items []Item) {
 	synth := m.extractSynthetic()
 	m.items = append(synth, items...)
+	m.pruneStatuses()
+}
+
+// pruneStatuses drops any status entry whose channel ID is no longer in
+// m.items, so a status never outlives the row it belongs to.
+func (m *Model) pruneStatuses() {
+	if len(m.statuses) == 0 {
+		return
+	}
+	have := make(map[string]struct{}, len(m.items))
+	for _, it := range m.items {
+		have[it.ID] = struct{}{}
+	}
+	for id := range m.statuses {
+		if _, ok := have[id]; !ok {
+			delete(m.statuses, id)
+		}
+	}
 }
 
 // SetSyntheticItems replaces the set of non-channel destinations the finder
@@ -571,6 +596,7 @@ func (m Model) renderBox(termWidth int) string {
 	for i := startIdx; i < endIdx; i++ {
 		idx := m.filtered[i]
 		item := m.items[idx]
+		st := m.statuses[item.ID]
 
 		isSelected := i == m.selected
 
@@ -580,12 +606,31 @@ func (m Model) renderBox(termWidth int) string {
 		// attributes for everything after it, defeating the dim treatment.
 		var prefix, name string
 		if item.Joined {
-			prefix = channelPrefix(item)
+			prefix = channelPrefix(item, st)
 			nameStyle := lipgloss.NewStyle().Background(bg).Foreground(styles.TextPrimary)
 			if isSelected {
 				nameStyle = nameStyle.Background(bg).Foreground(styles.Primary).Bold(true)
 			}
-			name = nameStyle.Render(item.Name)
+			// Charge the status glyph to the name's own truncation
+			// budget (like the sidebar's buildCache) so a long name
+			// truncates before the glyph is lost.
+			label := item.Name
+			glyph := st.Glyph(time.Now())
+			glyphCells := 0
+			if glyph != "" {
+				glyphCells = 1 + st.GlyphWidth(time.Now())
+			}
+			nameBudget := contentWidth - lipgloss.Width(prefix) - 1 - glyphCells
+			if nameBudget < 1 {
+				nameBudget = 1
+			}
+			if lipgloss.Width(label) > nameBudget {
+				label = truncate.StringWithTail(label, uint(nameBudget), "…")
+			}
+			if glyph != "" {
+				label += " " + glyph
+			}
+			name = nameStyle.Render(label)
 		} else {
 			// Non-joined: dim grey for everything, including the prefix.
 			dim := lipgloss.NewStyle().Background(bg).Foreground(nonJoinedColor)
@@ -594,7 +639,8 @@ func (m Model) renderBox(termWidth int) string {
 		}
 
 		line := prefix + " " + name
-		// Truncate to fit (truncate.StringWithTail is ANSI-aware).
+		// Backstop for the non-joined branch; the joined branch above
+		// already budgets to fit.
 		if lipgloss.Width(line) > contentWidth {
 			line = truncate.StringWithTail(line, uint(contentWidth), "…")
 		}
@@ -652,8 +698,9 @@ func (m Model) renderBox(termWidth int) string {
 		Render(content)
 }
 
-// channelPrefix returns the display prefix for a channel type.
-func channelPrefix(item Item) string {
+// channelPrefix returns the display prefix for a channel type. st is
+// the DM peer's status (zero value for anything else).
+func channelPrefix(item Item, st peerstatus.Status) string {
 	switch item.Type {
 	case "threads":
 		// Single-cell flag glyph marks the synthetic "Threads" row as
@@ -667,6 +714,9 @@ func channelPrefix(item Item) string {
 	case "private":
 		return lipgloss.NewStyle().Foreground(styles.Warning).Render("◆")
 	case "dm":
+		if st.InDND(time.Now()) {
+			return lipgloss.NewStyle().Foreground(styles.Warning).Render(peerstatus.DNDGlyph)
+		}
 		if item.Presence == "active" {
 			return lipgloss.NewStyle().Foreground(styles.Accent).Render("●")
 		}
@@ -676,6 +726,23 @@ func channelPrefix(item Item) string {
 	default:
 		return lipgloss.NewStyle().Foreground(styles.TextMuted).Render("#")
 	}
+}
+
+// SetStatus updates the custom status and DND shown on the row with the
+// given channel ID. No-op for an empty ID; a zero-value st deletes the
+// entry instead of storing it.
+func (m *Model) SetStatus(channelID string, st peerstatus.Status) {
+	if channelID == "" {
+		return
+	}
+	if st == (peerstatus.Status{}) {
+		delete(m.statuses, channelID)
+		return
+	}
+	if m.statuses == nil {
+		m.statuses = make(map[string]peerstatus.Status)
+	}
+	m.statuses[channelID] = st
 }
 
 // Query returns the text the user has typed. Callers outside this
@@ -690,6 +757,12 @@ func (m Model) Query() string {
 // browseable alike, in insertion order and unfiltered.
 func (m Model) Items() []Item {
 	return append([]Item(nil), m.items...)
+}
+
+// StatusFor returns the DM status set on channelID via SetStatus, the
+// zero value when none is set.
+func (m Model) StatusFor(channelID string) peerstatus.Status {
+	return m.statuses[channelID]
 }
 
 // FilteredItems returns the rows matching the current query, in the

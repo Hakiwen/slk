@@ -88,6 +88,118 @@ func TestMigration_AddsHasUnreadColumn(t *testing.T) {
 	}
 }
 
+// seedUsersTable opens a fresh sqlite file at path and hand-creates
+// just enough pre-migration schema for the migrate() run that follows
+// to see it: a workspaces table, and a users table built from exactly
+// columnsDDL (the caller lists every column, including id/
+// workspace_id/name/version) with one seeded row.
+func seedUsersTable(t *testing.T, path, columnsDDL, rowValues string) {
+	t.Helper()
+	seed, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("opening seed db: %v", err)
+	}
+	if _, err := seed.Exec(`CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, domain TEXT NOT NULL DEFAULT '', icon_url TEXT NOT NULL DEFAULT '', last_synced_at INTEGER NOT NULL DEFAULT 0)`); err != nil {
+		t.Fatalf("seeding workspaces table: %v", err)
+	}
+	if _, err := seed.Exec("CREATE TABLE users (" + columnsDDL + ")"); err != nil {
+		t.Fatalf("seeding partial users schema: %v", err)
+	}
+	if _, err := seed.Exec(`INSERT INTO workspaces (id, name) VALUES ('T1', 'T1')`); err != nil {
+		t.Fatalf("seeding workspace: %v", err)
+	}
+	if _, err := seed.Exec("INSERT INTO users VALUES (" + rowValues + ")"); err != nil {
+		t.Fatalf("seeding user: %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("closing seed db: %v", err)
+	}
+}
+
+// assertUserVersion opens path (running migrate() via New, the real
+// entry point) and checks U1's version against want.
+func assertUserVersion(t *testing.T, path string, want int64, msg string) {
+	t.Helper()
+	db, err := New(path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+	var got int64
+	if err := db.conn.QueryRow(`SELECT version FROM users WHERE id = 'U1'`).Scan(&got); err != nil {
+		t.Fatalf("reading back version: %v", err)
+	}
+	if got != want {
+		t.Errorf("version = %d; want %d -- %s", got, want, msg)
+	}
+}
+
+// TestMigration_StatusColumnGroupResetsVersionEvenIfOneColumnAlreadyExisted:
+// status_emoji present but status_text/status_expiration missing still
+// resets the version (huddle columns seeded complete, to isolate this
+// from the huddle group).
+func TestMigration_StatusColumnGroupResetsVersionEvenIfOneColumnAlreadyExisted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	seedUsersTable(t, path,
+		"id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 0, "+
+			"status_emoji TEXT NOT NULL DEFAULT '', huddle_state TEXT NOT NULL DEFAULT '', huddle_expiration INTEGER NOT NULL DEFAULT 0",
+		"'U1', 'T1', 'alice', 42, '', 'default_unset', 0")
+
+	assertUserVersion(t, path, 0,
+		"status_text/status_expiration were missing even though status_emoji was present")
+}
+
+// TestMigration_HuddleColumnGroupResetsVersionEvenIfOneColumnAlreadyExisted
+// is the huddle-pair mirror: huddle_state present but huddle_expiration
+// missing still resets the version (status columns seeded complete).
+func TestMigration_HuddleColumnGroupResetsVersionEvenIfOneColumnAlreadyExisted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	seedUsersTable(t, path,
+		"id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 0, "+
+			"status_emoji TEXT NOT NULL DEFAULT '', status_text TEXT NOT NULL DEFAULT '', status_expiration INTEGER NOT NULL DEFAULT 0, huddle_state TEXT NOT NULL DEFAULT ''",
+		"'U1', 'T1', 'alice', 42, '', '', 0, 'default_unset'")
+
+	assertUserVersion(t, path, 0,
+		"huddle_expiration was missing even though huddle_state was present")
+}
+
+// TestMigration_StatusColumnGroupLeavesVersionAloneWhenAlreadyComplete
+// is the flip side: a database that already has every column in the
+// status group must not have its version reset again on a later open.
+func TestMigration_StatusColumnGroupLeavesVersionAloneWhenAlreadyComplete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+
+	db, err := New(path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := db.conn.Exec(`INSERT INTO workspaces (id, name) VALUES ('T1', 'T1')`); err != nil {
+		t.Fatalf("seeding workspace: %v", err)
+	}
+	if _, err := db.conn.Exec(`INSERT INTO users (id, workspace_id, name, version) VALUES ('U1', 'T1', 'alice', 7)`); err != nil {
+		t.Fatalf("seeding user: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("closing db: %v", err)
+	}
+
+	// Reopening an already-fully-migrated database must be a no-op for
+	// the version column: every status/huddle column is already there.
+	db2, err := New(path)
+	if err != nil {
+		t.Fatalf("reopening: %v", err)
+	}
+	defer db2.Close()
+
+	var version int64
+	if err := db2.conn.QueryRow(`SELECT version FROM users WHERE id = 'U1'`).Scan(&version); err != nil {
+		t.Fatalf("reading back version: %v", err)
+	}
+	if version != 7 {
+		t.Errorf("version = %d; want left at 7, an already-complete database must not reset it again", version)
+	}
+}
+
 // TestSubtypeMigrationOnPreExistingDB verifies that an existing
 // database created before the `subtype` column was added gets the
 // column added idempotently when New() is called against it.
