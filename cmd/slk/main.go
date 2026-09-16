@@ -1278,7 +1278,6 @@ func run() error {
 
 	// Declare p before wiring callbacks so closures can capture it
 	var p *tea.Program
-	active := &activeTeam{}
 	workspacesStore := newWorkspaceConfigStore(cfg)
 
 	// router holds the program-wide active workspace pointer. All
@@ -1327,10 +1326,11 @@ func run() error {
 	saveTheme := func(name string, scope themeswitcher.ThemeScope) {
 		switch scope {
 		case themeswitcher.ScopeWorkspace:
-			teamID := active.Get()
-			if teamID == "" {
+			active := router.Active()
+			if active == nil {
 				return // shouldn't happen, but guard against it
 			}
+			teamID := active.TeamID
 			teamName := teamID
 			if wctx := router.ByID(teamID); wctx != nil && wctx.TeamName != "" {
 				teamName = wctx.TeamName
@@ -1350,10 +1350,11 @@ func run() error {
 
 	// Wire sidebar width saver: always persist to the active workspace.
 	saveSidebarWidth := func(width int) {
-		teamID := active.Get()
-		if teamID == "" {
+		active := router.Active()
+		if active == nil {
 			return
 		}
+		teamID := active.TeamID
 		teamName := teamID
 		if wctx := router.ByID(teamID); wctx != nil && wctx.TeamName != "" {
 			teamName = wctx.TeamName
@@ -1369,7 +1370,7 @@ func run() error {
 	// through the router at invocation so the closure always targets
 	// the currently-active workspace context.
 	setStatus := func(action presencemenu.Action, snoozeMinutes int) {
-		wctx := router.ByID(active.Get())
+		wctx := router.Active()
 		if wctx == nil || wctx.Client == nil {
 			return
 		}
@@ -2023,8 +2024,9 @@ func run() error {
 		}
 
 		// Update active pointer; callbacks read router.Active() at
-		// invocation time, so no closure rebinding is needed.
-		active.Set(teamID)
+		// invocation time, so no closure rebinding is needed. Theme/
+		// SidebarWidth below still go through workspacesStore, not the
+		// outer cfg, for the same reason.
 		router.Set(wctx)
 
 		// Build external-user set from cached records so the mention
@@ -2048,12 +2050,14 @@ func run() error {
 		statuses := cachedPeerStatuses(db, wctx.TeamID)
 		wctx.PeerStatus.SeedHuddles(statuses)
 		channels := withPeerStatuses(wctx.Channels, statuses)
+
+		snap := workspacesStore.Snapshot()
 		return ui.WorkspaceSwitchedMsg{
 			TeamID:           wctx.TeamID,
 			TeamName:         wctx.TeamName,
 			Domain:           wctx.Client.TeamSubdomain(),
-			Theme:            cfg.ResolveTheme(teamID),
-			SidebarWidth:     cfg.ResolveWidth(teamID),
+			Theme:            snap.ResolveTheme(teamID),
+			SidebarWidth:     snap.ResolveWidth(teamID),
 			Channels:         channels,
 			FinderItems:      wctx.FinderItems,
 			UserNames:        wctx.UserNames,
@@ -2173,14 +2177,12 @@ func run() error {
 				if wctx.TeamID == defaultTeamID {
 					isInitial = true
 					router.Set(wctx)
-					active.Set(wctx.TeamID)
 				}
 				// else: not the configured default; never claim.
 			} else {
 				firstReady.Do(func() {
 					isInitial = true
 					router.Set(wctx)
-					active.Set(wctx.TeamID)
 				})
 			}
 
@@ -2200,7 +2202,7 @@ func run() error {
 				tsFormat:        tsFormat,
 				db:              db,
 				workspaceID:     teamID,
-				isActive:        func() bool { return teamID == active.Get() },
+				isActive:        func() bool { a := router.Active(); return a != nil && a.TeamID == teamID },
 				notifier:        notifier,
 				notifyCfg:       cfgSnap.Notifications,
 				currentUserID:   wctx.UserID,

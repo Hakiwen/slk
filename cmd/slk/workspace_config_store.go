@@ -1,6 +1,10 @@
 package main
 
-import "github.com/gammons/slk/internal/config"
+import (
+	"sync"
+
+	"github.com/gammons/slk/internal/config"
+)
 
 // workspaceConfigStore holds cfg.Workspaces. SaveTheme and
 // SaveSidebarWidth are the in-memory half of the theme/sidebar-width
@@ -9,13 +13,14 @@ import "github.com/gammons/slk/internal/config"
 // before reading it further (WorkspaceByTeamID, MatchSectionAndOrder,
 // SectionOrder, ResolveTheme, ResolveWidth).
 //
-// This version has no synchronization: a value copy of config.Config
-// does not copy Workspaces independently -- Workspaces is a map, so
-// Snapshot's copy aliases the same underlying map SaveTheme and
-// SaveSidebarWidth mutate concurrently from another goroutine. See
-// TestWorkspaceConfigStore_ConcurrentSaveAndSnapshot, which shows why
-// that's a live bug rather than a simplification.
+// mu guards cfg.Workspaces: a value copy of config.Config does not
+// copy Workspaces independently -- Workspaces is a map, so a naive
+// Snapshot's copy would alias the same underlying map SaveTheme and
+// SaveSidebarWidth mutate from another goroutine. Snapshot instead
+// takes its own independent copy under mu, and the savers hold mu for
+// their read-modify-write. See TestWorkspaceConfigStore_ConcurrentSaveAndSnapshot.
 type workspaceConfigStore struct {
+	mu  sync.RWMutex
 	cfg config.Config
 }
 
@@ -26,6 +31,8 @@ func newWorkspaceConfigStore(cfg config.Config) *workspaceConfigStore {
 // SaveTheme finds or creates teamID's TOML block and sets its Theme,
 // returning the TOML key for the caller to persist to disk.
 func (s *workspaceConfigStore) SaveTheme(teamID, name string) (tomlKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	tomlKey = s.tomlKeyFor(teamID)
 	ws := s.cfg.Workspaces[tomlKey]
 	ws.TeamID = teamID
@@ -36,6 +43,8 @@ func (s *workspaceConfigStore) SaveTheme(teamID, name string) (tomlKey string) {
 
 // SaveSidebarWidth is SaveTheme's sibling for sidebar width.
 func (s *workspaceConfigStore) SaveSidebarWidth(teamID string, width int) (tomlKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	tomlKey = s.tomlKeyFor(teamID)
 	ws := s.cfg.Workspaces[tomlKey]
 	ws.TeamID = teamID
@@ -47,7 +56,8 @@ func (s *workspaceConfigStore) SaveSidebarWidth(teamID string, width int) (tomlK
 // tomlKeyFor finds the existing TOML key for teamID, if any -- if no
 // block exists yet it falls back to the team ID itself (legacy
 // default; a future --add-workspace may have already written a
-// slug-keyed block) -- and ensures Workspaces is non-nil.
+// slug-keyed block) -- and ensures Workspaces is non-nil. Callers must
+// hold mu.
 func (s *workspaceConfigStore) tomlKeyFor(teamID string) string {
 	if s.cfg.Workspaces == nil {
 		s.cfg.Workspaces = make(map[string]config.Workspace)
@@ -60,8 +70,18 @@ func (s *workspaceConfigStore) tomlKeyFor(teamID string) string {
 	return teamID
 }
 
-// Snapshot returns cfg as every connect goroutine currently receives
-// it: a plain value copy.
+// Snapshot returns cfg with its own independent copy of Workspaces, so
+// the caller's later reads (via WorkspaceByTeamID, MatchSectionAndOrder,
+// SectionOrder, ResolveTheme, ResolveWidth) never alias the map
+// SaveTheme/SaveSidebarWidth mutate. Call once per workspace connect.
 func (s *workspaceConfigStore) Snapshot() config.Config {
-	return s.cfg
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cfg := s.cfg
+	clone := make(map[string]config.Workspace, len(cfg.Workspaces))
+	for k, v := range cfg.Workspaces {
+		clone[k] = v
+	}
+	cfg.Workspaces = clone
+	return cfg
 }

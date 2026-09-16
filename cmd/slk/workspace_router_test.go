@@ -42,3 +42,36 @@ func TestWorkspaceRouter_ConcurrentAddAndByID(t *testing.T) {
 		}
 	}
 }
+
+// TestWorkspaceRouter_ConcurrentSetAndActive is a race-detector test
+// for the half of workspaceRouter the activeTeam fix now relies on
+// exclusively: every isActive closure and workspace-scoped callback
+// used to read a plain activeTeam.id alongside router.Set, instead of
+// router.Active(). Active is backed by atomic.Pointer, so it was
+// always race-safe; this pins that so a future change to Set/Active
+// can't quietly reintroduce the class of bug activeTeam's removal
+// fixed (see TestActiveTeam_ConcurrentSetAndGet, deleted along with
+// activeTeam in the same commit as this test).
+func TestWorkspaceRouter_ConcurrentSetAndActive(t *testing.T) {
+	r := newWorkspaceRouter()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		id := fmt.Sprintf("T%d", i)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			r.Set(&WorkspaceContext{TeamID: id})
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_ = r.Active()
+			}
+		}()
+	}
+	wg.Wait()
+
+	if a := r.Active(); a == nil {
+		t.Fatal("Active() = nil after concurrent Set calls, want the last one to win")
+	}
+}
