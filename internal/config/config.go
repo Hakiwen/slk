@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gammons/slk/internal/core"
 	toml "github.com/pelletier/go-toml/v2"
 )
 
@@ -183,18 +184,8 @@ type Workspace struct {
 	VersionTS string `toml:"version_ts"`
 }
 
-type Theme struct {
-	Primary     string `toml:"primary"`
-	Accent      string `toml:"accent"`
-	Warning     string `toml:"warning"`
-	Error       string `toml:"error"`
-	Background  string `toml:"background"`
-	Surface     string `toml:"surface"`
-	SurfaceDark string `toml:"surface_dark"`
-	Text        string `toml:"text"`
-	TextMuted   string `toml:"text_muted"`
-	Border      string `toml:"border"`
-}
+// Theme is defined in internal/core, which the TUI shares.
+type Theme = core.Theme
 
 func Default() Config {
 	return Config{

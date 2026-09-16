@@ -11,6 +11,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
@@ -22,73 +23,17 @@ import (
 	"github.com/gammons/slk/internal/usergroups"
 )
 
-type MessageItem struct {
-	TS          string
-	UserName    string
-	UserID      string
-	Text        string
-	Timestamp   string // formatted display time (e.g. "3:04 PM")
-	DateStr     string // date string for grouping (e.g. "2026-04-23")
-	ThreadTS    string
-	ReplyCount  int
-	Reactions   []ReactionItem
-	Attachments []Attachment
-	IsEdited    bool
-	// Subtype mirrors Slack's `subtype` field on a message event.
-	// Currently we only act on "thread_broadcast" (a thread reply that
-	// was also sent to the channel) so we can render a label above it.
-	Subtype string
-
-	// Blocks holds parsed Slack Block Kit blocks. Rendered between
-	// the body Text and the file Attachments by Phase 5.
-	Blocks []blockkit.Block
-
-	// LegacyAttachments holds parsed entries from the legacy
-	// `attachments` field (color stripe + title + fields style bot
-	// cards). Rendered after Blocks.
-	LegacyAttachments []blockkit.LegacyAttachment
-}
-
-// Attachment represents a file or image attached to a message.
-// Kind is "image" for image/* mimetypes, "file" otherwise.
-// URL is the user-facing permalink (preferred) or fallback to url_private.
-type Attachment struct {
-	Kind string // "image" or "file"
-	Name string // display filename / title
-	URL  string // permalink (preferred) or url_private
-
-	// DownloadURL is the auth-gated url_private, used by the `d`
-	// download keybinding. Size is the file size in bytes (0 when
-	// Slack didn't provide one); shown in the file picker.
-	DownloadURL string
-	Size        int64
-
-	// Populated only for Kind == "image":
-	FileID string      // Slack file ID for cache key
-	Mime   string      // e.g. "image/png"
-	Thumbs []ThumbSpec // sorted ascending; empty for non-image
-}
-
-// ThumbSpec is one Slack thumbnail variant.
-//
-// This is intentionally distinct from image.ThumbSpec in the internal/image
-// package to avoid coupling the messages UI package to the image package's
-// internal type. A converter helper bridges the two where needed.
-type ThumbSpec struct {
-	URL string
-	W   int
-	H   int
-}
+// The message data types live in internal/core so the engine can build
+// them without importing the TUI.
+type (
+	MessageItem  = core.MessageItem
+	Attachment   = core.Attachment
+	ThumbSpec    = core.ThumbSpec
+	ReactionItem = core.ReactionItem
+)
 
 // AvatarFunc returns the rendered half-block avatar for a user ID, or empty string.
 type AvatarFunc func(userID string) string
-
-type ReactionItem struct {
-	Emoji      string // emoji name without colons, e.g. "thumbsup"
-	Count      int
-	HasReacted bool     // whether the current user has reacted with this emoji
-	UserIDs    []string // user IDs who reacted with this emoji
-}
 
 // viewEntry is a pre-rendered row in the message list (message or date separator).
 //

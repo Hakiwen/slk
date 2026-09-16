@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/searchresults"
 	"github.com/gammons/slk/internal/ui/sidebar"
@@ -52,14 +53,14 @@ func wsSearchOpts() []testOpt {
 		),
 		withMessages(testMessageItems(3)...),
 		withActiveChannel("C1"),
-		withChannelService(ChannelServiceFuncs{
+		withChannelService(core.ChannelServiceFuncs{
 			Lookup: func(id ids.ChannelID) (string, string, bool) {
 				if id == "C2" {
 					return "random", "channel", true
 				}
 				return "", "", false
 			},
-			FetchAround: func(id ids.ChannelID, ts ids.MessageTS) tea.Msg {
+			FetchAround: func(id ids.ChannelID, ts ids.MessageTS) core.Msg {
 				return fetchAroundMsg{channel: id, ts: ts}
 			},
 		}),
@@ -150,8 +151,8 @@ func TestWorkspaceSearchModeKeys(t *testing.T) {
 
 	var dispatched []string
 	installSearchSvc := func(a *App) {
-		a.SetSearchService(NewSearchService(SearchServiceFuncs{
-			SearchWorkspace: func(q string) tea.Msg {
+		a.SetSearchService(core.NewSearchService(core.SearchServiceFuncs{
+			SearchWorkspace: func(q string) core.Msg {
 				dispatched = append(dispatched, q)
 				return workspaceSearchDispatchedMsg{query: q}
 			},
@@ -217,7 +218,7 @@ func TestWorkspaceSearchModeKeys(t *testing.T) {
 				}
 				got, ok := cmd().(workspaceSearchDispatchedMsg)
 				if !ok {
-					t.Fatalf("cmd() = %T, want the SearchService's answer", cmd())
+					t.Fatalf("cmd() = %T, want the core.SearchService's answer", cmd())
 				}
 				if got.query != "hello" {
 					t.Errorf("service got query %q, want %q", got.query, "hello")

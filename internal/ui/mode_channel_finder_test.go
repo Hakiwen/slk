@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/sidebar"
@@ -78,8 +79,8 @@ func channelFinderOpts() []testOpt {
 			sidebar.ChannelItem{ID: "C2", Name: "random", Type: "channel"},
 			sidebar.ChannelItem{ID: "C3", Name: "design", Type: "channel"},
 		),
-		withChannelService(ChannelServiceFuncs{
-			Join: func(id ids.ChannelID, name string) tea.Msg {
+		withChannelService(core.ChannelServiceFuncs{
+			Join: func(id ids.ChannelID, name string) core.Msg {
 				return joinedMsg{id: id, name: name}
 			},
 		}),
@@ -252,7 +253,7 @@ func TestChannelFinderModeKeys(t *testing.T) {
 				}
 				j, ok := cmd().(joinedMsg)
 				if !ok {
-					t.Fatalf("cmd() = %T, want the ChannelService's join result", cmd())
+					t.Fatalf("cmd() = %T, want the core.ChannelService's join result", cmd())
 				}
 				if j.id != "C3" || j.name != "design" {
 					t.Errorf("join called with (%q, %q), want (C3, design)", j.id, j.name)

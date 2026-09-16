@@ -96,7 +96,7 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			pinDark(t, a)
 			saves = nil
 			if withSaver {
-				a.SetThemeSaver(func(name string, sc themeswitcher.ThemeScope) {
+				a.setThemeSaverForTest(func(name string, sc themeswitcher.ThemeScope) {
 					saves = append(saves, themeSave{name: name, scope: sc})
 				})
 			}
@@ -242,8 +242,8 @@ func TestThemeSwitcherModeKeys(t *testing.T) {
 			key:      keyCode(tea.KeyEnter),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, _ tea.Cmd) {
-				if a.themeSaveFn != nil {
-					t.Fatal("precondition: themeSaveFn should be nil")
+				if a.settings != nil {
+					t.Fatal("precondition: settings should be nil")
 				}
 				if want := lipgloss.Color(draculaPrimary); !colorEqual(styles.Primary, want) {
 					t.Errorf("styles.Primary = %v, want %v (Dracula)", styles.Primary, want)

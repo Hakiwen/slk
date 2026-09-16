@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/text"
@@ -83,7 +83,7 @@ type ChannelItem struct {
 // this helper rather than re-deriving the rule.
 //
 // Scoped to the dot deliberately: mentions pierce mute. See MentionBadge.
-func (item ChannelItem) IsVisiblyUnread(state cache.ReadState) bool {
+func (item ChannelItem) IsVisiblyUnread(state core.ReadState) bool {
 	return state.HasUnread && !item.IsMuted
 }
 
@@ -101,7 +101,7 @@ func (item ChannelItem) IsVisiblyUnread(state cache.ReadState) bool {
 //
 // The 99+ cap is applied by the renderer, not here: the DB keeps the true
 // count so a later refresh below 100 shows the real number.
-func (item ChannelItem) MentionBadge(state cache.ReadState) int {
+func (item ChannelItem) MentionBadge(state core.ReadState) int {
 	if !state.HasUnread {
 		return 0
 	}
@@ -274,7 +274,7 @@ type Model struct {
 	// active workspace, keyed by channel ID. Set by App via
 	// SetReadStateReader. May be nil — nil means "treat everything as
 	// no-unread" (used during early construction).
-	readStateReader func() map[string]cache.ReadState
+	readStateReader func() map[string]core.ReadState
 	// collapseByID parallels `collapsed` for Slack-mode (ID-keyed).
 	// Renames preserve collapse state because the ID is stable.
 	// Populated lazily; lookups treat nil as empty. Used in Task 9.
@@ -349,7 +349,7 @@ func (m *Model) SetSectionsProvider(p SectionsProvider) {
 // read state map for the workspace currently presented by this sidebar.
 // Called by View() at render time. Setting it invalidates the row cache
 // so the next render reflects the new source.
-func (m *Model) SetReadStateReader(f func() map[string]cache.ReadState) {
+func (m *Model) SetReadStateReader(f func() map[string]core.ReadState) {
 	m.readStateReader = f
 	m.cacheValid = false
 	m.dirty()
@@ -1021,7 +1021,7 @@ func (m *Model) rebuildFilter() {
 	// nil-safe: when no reader is installed (early construction, some
 	// tests) every lookup returns the zero value and IsStale's
 	// type-aware empty-LastReadTS branch handles it.
-	var readState map[string]cache.ReadState
+	var readState map[string]core.ReadState
 	if m.readStateReader != nil {
 		readState = m.readStateReader()
 	}
@@ -1191,7 +1191,7 @@ func (m *Model) rebuildNavPreserveCursor() {
 // unmuted channel in the section is holding a mention, the header must
 // shout as loudly as that row would.
 func (m *Model) aggregateForSection(section string) (unread, mentions int, allMuted bool) {
-	var readState map[string]cache.ReadState
+	var readState map[string]core.ReadState
 	if m.readStateReader != nil {
 		readState = m.readStateReader()
 	}
@@ -1281,7 +1281,7 @@ func (m *Model) buildCache(width int) {
 	// is no longer consulted by rendering. A nil reader (early
 	// construction, tests without wiring) means "treat everything as
 	// no-unread" — lookups on a nil map return the zero ReadState.
-	var readState map[string]cache.ReadState
+	var readState map[string]core.ReadState
 	if m.readStateReader != nil {
 		readState = m.readStateReader()
 	}

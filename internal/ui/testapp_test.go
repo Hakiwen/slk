@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -81,7 +82,7 @@ func TestNewTestApp_WithMode(t *testing.T) {
 }
 
 func TestNewTestApp_WithChannelService(t *testing.T) {
-	a := newTestApp(t, withChannelService(ChannelServiceFuncs{
+	a := newTestApp(t, withChannelService(core.ChannelServiceFuncs{
 		SyncedAt: func(ids.ChannelID) int64 { return 42 },
 	}))
 	if got := a.channels.SyncedAt("C1"); got != 42 {
@@ -126,7 +127,7 @@ type testAppCfg struct {
 	activeChannel string
 	activeTeam    string
 	render        bool
-	chanSvc       *ChannelServiceFuncs
+	chanSvc       *core.ChannelServiceFuncs
 	splits        []wintree.Dir
 	threadSums    []cache.ThreadSummary
 	hasThreadSums bool
@@ -218,7 +219,7 @@ func withView(v View) testOpt { return func(c *testAppCfg) { c.view = v } }
 // populated. Required by any test that does mouse hit-testing.
 func withRender() testOpt { return func(c *testAppCfg) { c.render = true } }
 
-func withChannelService(f ChannelServiceFuncs) testOpt {
+func withChannelService(f core.ChannelServiceFuncs) testOpt {
 	return func(c *testAppCfg) { c.chanSvc = &f }
 }
 
@@ -293,7 +294,7 @@ func buildTestApp(opts ...testOpt) *App {
 		a.SetChannels(cfg.channels)
 	}
 	if cfg.chanSvc != nil {
-		a.SetChannelService(NewChannelService(*cfg.chanSvc))
+		setChannelFuncsForTest(a, *cfg.chanSvc)
 	}
 	if cfg.hasMsgs {
 		a.messagepane.SetMessages(cfg.msgs)

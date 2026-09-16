@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/statusbar"
@@ -119,7 +120,7 @@ func TestApp_PlainClickOnMessageOpensThread(t *testing.T) {
 
 	fetchedCh := ""
 	fetchedTS := ""
-	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 		fetchedCh = string(channelID)
 		fetchedTS = string(threadTS)
 		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: nil}
@@ -163,7 +164,7 @@ func TestApp_PlainClickOnChromeDoesNotOpenThread(t *testing.T) {
 	a.activeChannelID = "C1"
 
 	called := false
-	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 		called = true
 		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: nil}
 	})
@@ -197,7 +198,7 @@ func TestApp_DragDoesNotOpenThread(t *testing.T) {
 	a.activeChannelID = "C1"
 
 	called := false
-	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+	a.setThreadFetcherForTest(func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 		called = true
 		return ThreadRepliesLoadedMsg{ThreadTS: string(threadTS), Replies: nil}
 	})

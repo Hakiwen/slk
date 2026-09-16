@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/emojipicker"
@@ -20,16 +21,8 @@ import (
 )
 
 // PendingAttachment is a file (or in-memory image) waiting to be
-// uploaded with the next send. Bytes and Path are mutually exclusive:
-// Bytes is set for clipboard-pasted images; Path is set for
-// file-path-pasted files (read at upload time, not at attach time).
-type PendingAttachment struct {
-	Filename string
-	Bytes    []byte // non-nil for clipboard images
-	Path     string // non-empty for file-path attachments
-	Mime     string
-	Size     int64
-}
+// uploaded with the next send.
+type PendingAttachment = core.PendingAttachment
 
 type Model struct {
 	input       textarea.Model

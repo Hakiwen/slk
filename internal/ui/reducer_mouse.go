@@ -20,7 +20,7 @@
 //
 // Free reducer (not controller-absorbed) because both arms route
 // across multiple sub-models: the sidebar, messagepane, threadPanel,
-// workspaceRail, threadsView, drag controller, workspaceSwitcher
+// workspaceRail, threadsView, drag controller, workspaceSvc
 // service, and reaction toggle helper. No single existing
 // controller owns this cross-section.
 //
@@ -197,13 +197,13 @@ func reduceMouseClick(a *App, m tea.MouseClickMsg) tea.Cmd {
 		if !ok {
 			return nil
 		}
-		if a.workspaceSwitcher == nil || item.ID == a.workspaceRail.SelectedID() {
+		if a.workspaceSvc == nil || item.ID == a.workspaceRail.SelectedID() {
 			return nil
 		}
-		switcher := a.workspaceSwitcher
+		switcher := a.workspaceSvc
 		teamID := item.ID
 		return func() tea.Msg {
-			return switcher(teamID)
+			return switcher.Switch(teamID)
 		}
 
 	case a.sidebarVisible && x < a.layout.SidebarEnd():

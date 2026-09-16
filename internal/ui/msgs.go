@@ -17,7 +17,7 @@ import (
 	"image"
 	"time"
 
-	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -178,7 +178,7 @@ type (
 	// match the active team.
 	ThreadsListLoadedMsg struct {
 		TeamID    string
-		Summaries []cache.ThreadSummary
+		Summaries []core.ThreadSummary
 		// SubscriptionsAvailable reflects whether the most recent
 		// subscription sync succeeded in fetching the authoritative
 		// thread-subscription list. The threads view renders a banner

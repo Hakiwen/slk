@@ -24,8 +24,11 @@ import (
 	"github.com/gammons/slk/internal/bootstrap"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
+	"github.com/gammons/slk/internal/editor"
 	emojiwidth "github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/export"
 	"github.com/gammons/slk/internal/filedl"
 	"github.com/gammons/slk/internal/ids"
 	imgpkg "github.com/gammons/slk/internal/image"
@@ -882,7 +885,7 @@ func run() error {
 
 	// Load custom themes and apply the active theme
 	themesDir := filepath.Join(configDir, "themes")
-	styles.LoadCustomThemes(themesDir)
+	styles.LoadCustomThemes(os.DirFS(themesDir))
 	// At startup we apply the global default. The per-workspace theme
 	// for the initial active workspace is then re-applied via
 	// WorkspaceReadyMsg.Theme once that workspace finishes connecting,
@@ -902,8 +905,8 @@ func run() error {
 	// Otherwise (X11 / macOS / Windows) use the native library.
 	clipboardOK := true
 	useWaylandClipboard := false
-	if ui.IsWayland() {
-		if ui.HasWlPaste() {
+	if IsWayland() {
+		if HasWlPaste() {
 			useWaylandClipboard = true
 		} else {
 			log.Printf("Warning: WAYLAND_DISPLAY set but wl-paste not on PATH; install wl-clipboard for paste-to-upload. Ctrl+V image paste disabled.")
@@ -976,16 +979,23 @@ func run() error {
 	app.SetSixelFrameStore(sixelFrames)
 	app.SetHelpFooter(versionpkg.ModalFooter(version))
 	app.SetClipboardAvailable(clipboardOK)
+	desktop := core.DesktopServiceFuncs{
+		Open:          launchOS,
+		ReadClipboard: nativeClipboardRead,
+		Stat:          os.Stat,
+		SaveThread:    export.SaveThread,
+	}
 	if sr := notify.NewStatusReporter(cfg.Notifications.StatusCommand); sr != nil {
 		// Enqueue never blocks a render: it hands the state to the reporter's
 		// single worker, which serializes runs and coalesces bursts so the
 		// external surface can't end up pinned to a stale count by an
 		// out-of-order subprocess.
-		app.SetStatusReporter(sr.Enqueue)
+		desktop.ReportStatus = sr.Enqueue
 	}
 	if useWaylandClipboard {
-		app.SetClipboardReader(ui.WaylandClipboardReader())
+		desktop.ReadClipboard = WaylandClipboardReader()
 	}
+	app.SetDesktopService(core.NewDesktopService(desktop))
 
 	// Connect to workspaces
 	ctx := context.Background()
@@ -1168,7 +1178,6 @@ func run() error {
 	}
 	app.SetImageContext(buildImgCtx(nil))
 	app.SetImageFetcher(imageFetcher)
-	app.SetFileDownloader(fileDownloader)
 	app.SetImageProtocol(proto)
 
 	// Emoji-image rendering. Active only on kitty (per ImageMode
@@ -1212,6 +1221,7 @@ func run() error {
 	app.SetSidebarStaleThreshold(time.Duration(cfg.Sidebar.HideInactiveAfterDays) * 24 * time.Hour)
 	app.SetMouseWheelLines(cfg.Appearance.MouseWheelLines)
 	app.SetColoredUsernames(cfg.Appearance.ColoredUsernames)
+	app.SetEditorService(core.NewEditorService(editor.WriteDraft, editor.Edit, editor.TakeDraft))
 	if editor, ok := ui.ResolveEditor(cfg.Compose.Editor); ok {
 		app.SetComposeEditor(editor)
 	}
@@ -1250,7 +1260,7 @@ func run() error {
 	// thousands of users) wrote ~100MB of kitty graphics APC escape
 	// data to stdout at startup and produced a multi-minute hang on
 	// terminals that decode kitty graphics (kitty, ghostty).
-	app.SetAvatarFunc(func(userID string) string {
+	app.SetAvatarService(core.NewAvatarService(func(userID string) string {
 		if rendered := avatarCache.Get(userID); rendered != "" {
 			return rendered
 		}
@@ -1268,10 +1278,10 @@ func run() error {
 			}
 		}
 		return ""
-	})
+	}))
 
 	// Wire theme switcher: dispatch to the appropriate saver based on scope.
-	app.SetThemeSaver(func(name string, scope themeswitcher.ThemeScope) {
+	saveTheme := func(name string, scope themeswitcher.ThemeScope) {
 		switch scope {
 		case themeswitcher.ScopeWorkspace:
 			if activeTeamID == "" {
@@ -1310,10 +1320,10 @@ func run() error {
 				log.Printf("save global theme: %v", err)
 			}
 		}
-	})
+	}
 
 	// Wire sidebar width saver: always persist to the active workspace.
-	app.SetWidthSaver(func(width int) {
+	saveSidebarWidth := func(width int) {
 		if activeTeamID == "" {
 			return
 		}
@@ -1338,12 +1348,13 @@ func run() error {
 		if err := saveWorkspaceWidth(configPath, tomlKey, activeTeamID, teamName, width); err != nil {
 			log.Printf("save workspace sidebar width: %v", err)
 		}
-	})
+	}
+	app.SetSettingsService(core.NewSettingsService(saveTheme, saveSidebarWidth))
 
 	// Wire presence/DND status setter. Resolves activeTeamID through
 	// the router at invocation so the closure always targets the
 	// currently-active workspace context.
-	app.SetStatusSetter(func(action presencemenu.Action, snoozeMinutes int) {
+	setStatus := func(action presencemenu.Action, snoozeMinutes int) {
 		wctx := router.ByID(activeTeamID)
 		if wctx == nil || wctx.Client == nil {
 			return
@@ -1379,7 +1390,7 @@ func run() error {
 				p.Send(ui.ToastMsg{Text: "Status change failed: " + err.Error()})
 			}
 		}()
-	})
+	}
 
 	// wireCallbacks installs all App callbacks once at startup. Each
 	// callback reads router.Active() at invocation time, so the
@@ -1391,7 +1402,7 @@ func run() error {
 	// vars BEFORE the `go func()` so they are not affected by a
 	// concurrent router.Set during the goroutine's lifetime.
 	wireCallbacks := func(router *workspaceRouter) {
-		app.SetReadStateReader(func() map[string]cache.ReadState {
+		channelReadStates := func() map[string]cache.ReadState {
 			wctx := router.Active()
 			if wctx == nil {
 				return nil
@@ -1402,18 +1413,19 @@ func run() error {
 				return nil
 			}
 			return state
-		})
+		}
 
-		app.SetWorkspaceUnreadReader(func() []string {
+		unreadWorkspaces := func() []string {
 			unread, err := db.UnreadChannels()
 			if err != nil {
 				log.Printf("Warning: UnreadChannels: %v", err)
 				return nil
 			}
 			return railUnreadWorkspaces(unread, router.ByID)
-		})
+		}
+		app.SetUnreadService(core.NewUnreadService(channelReadStates, unreadWorkspaces))
 
-		app.SetChannelService(ui.NewChannelService(ui.ChannelServiceFuncs{
+		app.SetChannelService(core.NewChannelService(core.ChannelServiceFuncs{
 			RecordVisit: func(channelID ids.ChannelID) {
 				chIDStr := string(channelID)
 				wctx := router.Active()
@@ -1487,10 +1499,10 @@ func run() error {
 				// off the Update goroutine.
 				wctx.Membership.EnsureFresh(context.Background(), string(channelID))
 			},
-			OpenConversation: func(userIDs []string, requestID uint64) tea.Cmd {
+			OpenConversation: func(userIDs []string, requestID uint64) core.Cmd {
 				wctx := router.Active()
 				if wctx == nil {
-					return func() tea.Msg {
+					return func() core.Msg {
 						return ui.NewMessageFailedMsg{
 							RequestID: requestID,
 							Err:       fmt.Errorf("no active workspace"),
@@ -1498,7 +1510,7 @@ func run() error {
 					}
 				}
 				client := wctx.Client
-				return func() tea.Msg {
+				return func() core.Msg {
 					channelID, alreadyOpen, err := client.OpenConversation(ctx, userIDs)
 					if err != nil {
 						return ui.NewMessageFailedMsg{
@@ -1514,7 +1526,7 @@ func run() error {
 					}
 				}
 			},
-			Fetch: func(channelID ids.ChannelID, channelName string) tea.Msg {
+			Fetch: func(channelID ids.ChannelID, channelName string) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil || wctx.Client == nil {
@@ -1542,7 +1554,7 @@ func run() error {
 					MarkedTS: markedTS,
 				}
 			},
-			MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+			MarkRead: func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 				wctx := router.Active()
 				if wctx == nil || wctx.Client == nil {
 					return nil
@@ -1550,7 +1562,7 @@ func run() error {
 				markChannelReadAsync(ctx, wctx.Client, db, p, string(channelID), string(ts))
 				return nil // ChannelMarkedReadMsg is emitted from inside the goroutine
 			},
-			FetchOlder: func(channelID ids.ChannelID, oldestTS ids.MessageTS) tea.Msg {
+			FetchOlder: func(channelID ids.ChannelID, oldestTS ids.MessageTS) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1563,7 +1575,7 @@ func run() error {
 					Messages:  msgItems,
 				}
 			},
-			FetchAround: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+			FetchAround: func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1575,7 +1587,7 @@ func run() error {
 				}
 				return ui.MessagesAroundLoadedMsg{ChannelID: chIDStr, TargetTS: string(ts), Messages: msgItems}
 			},
-			Join: func(channelID ids.ChannelID, channelName string) tea.Msg {
+			Join: func(channelID ids.ChannelID, channelName string) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1589,8 +1601,8 @@ func run() error {
 			},
 		}))
 
-		app.SetSearchService(ui.NewSearchService(ui.SearchServiceFuncs{
-			SearchChannel: func(channelID ids.ChannelID, query string) tea.Msg {
+		app.SetSearchService(core.NewSearchService(core.SearchServiceFuncs{
+			SearchChannel: func(channelID ids.ChannelID, query string) core.Msg {
 				wctx := router.Active()
 				if wctx == nil {
 					// Returning nil would leave the `/query  …` spinner
@@ -1614,8 +1626,8 @@ func run() error {
 			SearchWorkspace: searchWorkspaceFunc(router, db, tsFormat),
 		}))
 
-		app.SetMessageService(ui.NewMessageService(ui.MessageServiceFuncs{
-			Send: func(channelID ids.ChannelID, text string) tea.Msg {
+		app.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
+			Send: func(channelID ids.ChannelID, text string) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1644,7 +1656,7 @@ func run() error {
 					},
 				}
 			},
-			Edit: func(channelID ids.ChannelID, ts ids.MessageTS, text string) tea.Msg {
+			Edit: func(channelID ids.ChannelID, ts ids.MessageTS, text string) core.Msg {
 				chIDStr, tsStr := string(channelID), string(ts)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1662,7 +1674,7 @@ func run() error {
 				}
 				return ui.MessageEditedMsg{ChannelID: chIDStr, TS: tsStr, Err: err}
 			},
-			Delete: func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+			Delete: func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 				chIDStr, tsStr := string(channelID), string(ts)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1676,7 +1688,7 @@ func run() error {
 				}
 				return ui.MessageDeletedMsg{ChannelID: chIDStr, TS: tsStr, Err: err}
 			},
-			MarkUnread: func(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) tea.Msg {
+			MarkUnread: func(channelID ids.ChannelID, threadTS ids.ThreadTS, boundaryTS ids.MessageTS, unreadCount int) core.Msg {
 				chIDStr := string(channelID)
 				threadTSStr := string(threadTS)
 				boundaryTSStr := string(boundaryTS)
@@ -1754,8 +1766,8 @@ func run() error {
 			},
 		}))
 
-		app.SetUploader(func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) tea.Cmd {
-			return func() tea.Msg {
+		upload := func(channelID, threadTS, caption string, attachments []compose.PendingAttachment) core.Cmd {
+			return func() core.Msg {
 				wctx := router.Active()
 				if wctx == nil {
 					return nil
@@ -1791,10 +1803,11 @@ func run() error {
 				p.Send(ui.UploadProgressMsg{Done: len(attachments), Total: len(attachments)})
 				return ui.UploadResultMsg{Err: nil}
 			}
-		})
+		}
+		app.SetFileService(core.NewFileService(upload, fileDownloader.Download))
 
-		app.SetThreadService(ui.NewThreadService(ui.ThreadServiceFuncs{
-			Fetch: func(channelID ids.ChannelID, threadTS ids.ThreadTS) tea.Msg {
+		app.SetThreadService(core.NewThreadService(core.ThreadServiceFuncs{
+			Fetch: func(channelID ids.ChannelID, threadTS ids.ThreadTS) core.Msg {
 				chIDStr, threadTSStr := string(channelID), string(threadTS)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1813,7 +1826,7 @@ func run() error {
 				}
 				return loadCachedThreadReplies(db, wctx.Client.UserID(), string(channelID), string(threadTS), wctx.UserNames, tsFormat, router)
 			},
-			Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) tea.Cmd {
+			Mark: func(channelID ids.ChannelID, threadTS ids.ThreadTS, ts ids.MessageTS) core.Cmd {
 				chIDStr, threadTSStr, tsStr := string(channelID), string(threadTS), string(ts)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1821,7 +1834,7 @@ func run() error {
 				}
 				client := wctx.Client
 				teamID := wctx.TeamID
-				return func() tea.Msg {
+				return func() core.Msg {
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					defer cancel()
 					// markThreadRead persists the cursor only after
@@ -1837,7 +1850,7 @@ func run() error {
 					}
 				}
 			},
-			SendReply: func(channelID ids.ChannelID, threadTS ids.ThreadTS, text string, broadcast bool) tea.Msg {
+			SendReply: func(channelID ids.ChannelID, threadTS ids.ThreadTS, text string, broadcast bool) core.Msg {
 				chIDStr, threadTSStr := string(channelID), string(threadTS)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1878,7 +1891,7 @@ func run() error {
 					},
 				}
 			},
-			ListFetch: func(teamID ids.TeamID) tea.Msg {
+			ListFetch: func(teamID ids.TeamID) core.Msg {
 				teamIDStr := string(teamID)
 				wctx := router.Active()
 				if wctx == nil {
@@ -1936,7 +1949,7 @@ func run() error {
 			},
 		}))
 
-		app.SetReactionService(ui.NewReactionService(
+		app.SetReactionService(core.NewReactionService(
 			func(channelID ids.ChannelID, messageTS ids.MessageTS, emojiName string) error {
 				wctx := router.Active()
 				if wctx == nil {
@@ -1974,13 +1987,14 @@ func run() error {
 			},
 		))
 
-		app.SetTypingSender(func(channelID string) {
+		sendTyping := func(channelID string) {
 			wctx := router.Active()
 			if wctx == nil {
 				return
 			}
 			_ = wctx.Client.SendTyping(channelID)
-		})
+		}
+		app.SetPresenceService(core.NewPresenceService(setStatus, sendTyping))
 
 	}
 
@@ -1988,7 +2002,7 @@ func run() error {
 	wireCallbacks(router)
 
 	// Wire workspace switcher
-	app.SetWorkspaceSwitcher(func(teamID string) tea.Msg {
+	app.SetWorkspaceService(core.NewWorkspaceService(func(teamID string) core.Msg {
 		wctx := router.ByID(teamID)
 		if wctx == nil {
 			return nil
@@ -2027,7 +2041,7 @@ func run() error {
 			UserGroups:       wctx.UserGroups(),
 			SectionsProvider: sectionsProviderAdapter{store: wctx.SectionStore},
 		}
-	})
+	}))
 
 	// Resolve general.default_workspace if set. We honor it only if
 	// the matching token is actually configured; otherwise fall back
@@ -3854,8 +3868,8 @@ func fetchThreadReplies(client *slackclient.Client, channelID, threadTS string, 
 // workspace. Always returns a WorkspaceSearchResultsMsg — a nil msg
 // would leave the ctrl+f modal spinner stuck (the reducer only exits
 // the loading state on a results msg).
-func searchWorkspaceFunc(router *workspaceRouter, db *cache.DB, tsFormat string) func(query string) tea.Msg {
-	return func(query string) tea.Msg {
+func searchWorkspaceFunc(router *workspaceRouter, db *cache.DB, tsFormat string) func(query string) core.Msg {
+	return func(query string) core.Msg {
 		wctx := router.Active()
 		if wctx == nil {
 			return ui.WorkspaceSearchResultsMsg{Query: query, Err: errors.New("no active workspace")}

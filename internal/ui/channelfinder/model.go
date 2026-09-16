@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/overlay"
@@ -32,25 +33,7 @@ type ChannelResult struct {
 }
 
 // Item represents a searchable channel/DM entry.
-type Item struct {
-	ID       string
-	Name     string
-	Type     string // channel, dm, group_dm, private, threads
-	Presence string // for DMs: active, away
-	Joined   bool   // true if the user is already a member; false for browseable public channels
-	// LastVisited is the unix timestamp (seconds) of the user's most
-	// recent visit to this channel; 0 means never visited. Drives the
-	// recency-based sort used by filter(): empty-query order is by
-	// LastVisited DESC, and on a query LastVisited breaks ties within
-	// a match tier.
-	LastVisited int64
-	// Synthetic marks non-channel destinations (e.g. "Threads") that
-	// the finder pins above real channels under empty-query and that
-	// callers route differently (e.g. activating a view rather than
-	// opening a channel). These items are preserved across SetItems
-	// and SetBrowseable mutations so the finder always offers them.
-	Synthetic bool
-}
+type Item = core.ChannelFinderItem
 
 // Model is the fuzzy channel finder overlay.
 type Model struct {

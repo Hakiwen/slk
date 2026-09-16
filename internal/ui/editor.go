@@ -9,12 +9,12 @@ package ui
 import (
 	"errors"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 )
 
@@ -32,22 +32,6 @@ func getenv(key, def string) string {
 func ResolveEditor(configEditor string) (parts []string, ok bool) {
 	parts = strings.Fields(getenv("VISUAL", getenv("EDITOR", configEditor)))
 	return parts, len(parts) > 0
-}
-
-func editorCommand(parts []string, path string) *exec.Cmd {
-	args := append(append([]string{}, parts[1:]...), path)
-	cmd := exec.Command(parts[0], args...)
-	// tea.ExecProcess only fills in Stdin/Stdout/Stderr when unset, and
-	// otherwise falls back to the Program's own output (a non-*os.File
-	// io.Writer wrapping sixel frame correlation) — which forces Go's
-	// exec package to pipe the child through a copy goroutine instead
-	// of a real fd. The editor's own terminal-capability negotiation
-	// (and mouse parsing) breaks without a genuine tty here, same as it
-	// would for any program handed a pipe instead of its real stdout.
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd
 }
 
 // EditorFinishedMsg reports an external-editor session ending. Path is
@@ -73,18 +57,8 @@ func (a *App) openComposeInEditor() tea.Cmd {
 		target = &a.threadCompose
 	}
 
-	f, err := os.CreateTemp("", "slk-compose-*.md")
+	path, err := a.editor.WriteDraft(target.Value())
 	if err != nil {
-		return toastWithClear(a, "Could not open editor: "+err.Error(), 3*time.Second)
-	}
-	path := f.Name()
-	if _, err := f.WriteString(target.Value()); err != nil {
-		f.Close()
-		os.Remove(path)
-		return toastWithClear(a, "Could not open editor: "+err.Error(), 3*time.Second)
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(path)
 		return toastWithClear(a, "Could not open editor: "+err.Error(), 3*time.Second)
 	}
 
@@ -92,15 +66,12 @@ func (a *App) openComposeInEditor() tea.Cmd {
 	target.SetPlaceholderOverride("Editing in $EDITOR — waiting for it to exit...")
 	debuglog.General("editor: opening %v for %s", a.composeEditor, path)
 
-	cmd := editorCommand(a.composeEditor, path)
-	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+	return teaCmd(a.editor.Edit(a.composeEditor, path, func(err error) core.Msg {
 		return EditorFinishedMsg{Panel: panel, Path: path, Err: err}
-	})
+	}))
 }
 
 func reduceEditorFinished(a *App, m EditorFinishedMsg) tea.Cmd {
-	defer os.Remove(m.Path)
-
 	target := &a.compose
 	if m.Panel == PanelThread {
 		target = &a.threadCompose
@@ -108,20 +79,20 @@ func reduceEditorFinished(a *App, m EditorFinishedMsg) tea.Cmd {
 	target.SetEditingExternally(false)
 	target.SetPlaceholderOverride("")
 
-	// A non-nil *exec.ExitError means the editor ran and exited
-	// non-zero — trust the file over that (some editors exit non-zero
-	// on things that still leave a saved draft). Any other error means
-	// it never ran at all (e.g. not found), which the user should hear
-	// about.
-	var exitErr *exec.ExitError
+	// An error with an exit code (*exec.ExitError) means the editor ran
+	// and exited non-zero — trust the file over that (some editors exit
+	// non-zero on things that still leave a saved draft). Any other error
+	// means it never ran at all (e.g. not found), which the user should
+	// hear about.
+	var exitErr interface{ ExitCode() int }
 	launchFailed := m.Err != nil && !errors.As(m.Err, &exitErr)
 	debuglog.General("editor: finished path=%s err=%v launchFailed=%v", m.Path, m.Err, launchFailed)
 
-	content, readErr := os.ReadFile(m.Path)
+	content, readErr := a.editor.TakeDraft(m.Path)
 	if readErr != nil {
 		return toastWithClear(a, "Editor: could not read draft back: "+readErr.Error(), 3*time.Second)
 	}
-	target.SetValue(strings.TrimRight(string(content), "\n"))
+	target.SetValue(strings.TrimRight(content, "\n"))
 
 	if launchFailed {
 		return toastWithClear(a, "Could not open editor: "+m.Err.Error(), 4*time.Second)

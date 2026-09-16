@@ -34,7 +34,7 @@ func TestHandleInsertMode_PasteIgnoresCapsLock(t *testing.T) {
 	a.SetMode(ModeInsert)
 	a.focusedPanel = PanelMessages
 	a.SetClipboardAvailable(true)
-	a.SetClipboardReader(fakeClipboard(nil, []byte("pasted via ctrl+v")))
+	a.setClipboardReaderForTest(fakeClipboard(nil, []byte("pasted via ctrl+v")))
 	_ = a.compose.Focus()
 
 	_ = a.handleKey(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl | tea.ModCapsLock})

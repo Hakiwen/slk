@@ -25,7 +25,7 @@ func TestWorkspaceReady_RefreshesRailAndTitle(t *testing.T) {
 		nil,
 	)
 	workspaceUnreads := []string{"T1", "T2"}
-	app.SetWorkspaceUnreadReader(func() []string { return workspaceUnreads })
+	app.setWorkspaceUnreadReaderForTest(func() []string { return workspaceUnreads })
 	app.activeTeamID = "T1"
 	app.notifyReadStateChanged()
 	if got, want := app.windowTitle, "slk SW (1) +1"; got != want {

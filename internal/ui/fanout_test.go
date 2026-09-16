@@ -10,8 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
-
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/wintree"
@@ -139,7 +138,7 @@ func TestFanout_MarkReadOnlyOnFocusedSelection(t *testing.T) {
 	a, w1, _ := twoWindowApp(t)
 	a.winModels[w1].SetLastReadTS("5.0")
 	markReadCalls := 0
-	a.setChannelReadMarkerForTest(func(channelID ids.ChannelID, ts ids.MessageTS) tea.Msg {
+	a.setChannelReadMarkerForTest(func(channelID ids.ChannelID, ts ids.MessageTS) core.Msg {
 		markReadCalls++
 		return nil
 	})
@@ -243,7 +242,7 @@ func TestFetchingOlder_PerChannelIsolation(t *testing.T) {
 	_, _ = a.Update(ChannelSelectedMsg{ID: "C2", Name: "ops", Type: "channel"})
 	a.messagepane.SetMessages(testMessageItems(2))
 	called := false
-	a.setOlderMessagesFetcherForTest(func(channelID ids.ChannelID, oldestTS ids.MessageTS) tea.Msg {
+	a.setOlderMessagesFetcherForTest(func(channelID ids.ChannelID, oldestTS ids.MessageTS) core.Msg {
 		if channelID != "C2" {
 			t.Errorf("fetcher called for %q, want C2", channelID)
 		}
