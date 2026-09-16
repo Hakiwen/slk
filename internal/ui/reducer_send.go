@@ -347,9 +347,23 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 			a.recordChannelMark(m.ChannelID, m.Message.TS)
 			a.notifyReadStateChanged()
 		}
-	} else {
-		debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=skipped_thread_reply",
+	} else if inOpenThreadPanel && a.terminalFocused {
+		// On screen and visible: the thread mark staged above clears
+		// it before anything would repaint the dot, the same reason
+		// the channel arm skips the notification.
+		debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=thread_reply_on_screen_mark_read",
 			m.ChannelID, m.Message.TS)
+	} else {
+		// The reply never touches the channel's has_unread, but the WS
+		// handler cached it before sending this message, and the rail's
+		// thread half (railThreadsUnread in cmd/slk) reads that cache:
+		// a subscribed thread with a newer reply is unread. Re-read now,
+		// as the channel arm does, rather than waiting for the threads
+		// list refresh scheduled below -- that fetch is dropped if the
+		// user switches workspaces inside its debounce window.
+		debuglog.Cache("NewMessageMsg: channel=%s ts=%s decision=thread_reply_refresh_rail",
+			m.ChannelID, m.Message.TS)
+		a.notifyReadStateChanged()
 	}
 
 	var cmds []tea.Cmd

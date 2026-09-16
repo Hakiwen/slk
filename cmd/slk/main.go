@@ -1251,6 +1251,14 @@ func run() error {
 	}
 	app.SetLoadingWorkspaces(wsNames)
 	app.SetWorkspaces(wsItems)
+	// The rail reader asks these workspaces about unread threads: the
+	// configured set, not the connected one, so a workspace still
+	// connecting keeps last session's thread dot the way it keeps its
+	// channel dot.
+	railTeamIDs := make([]string, 0, len(wsItems))
+	for _, it := range wsItems {
+		railTeamIDs = append(railTeamIDs, it.ID)
+	}
 	app.SetTypingEnabled(cfg.Animations.TypingIndicators)
 	app.SetSidebarStaleThreshold(time.Duration(cfg.Sidebar.HideInactiveAfterDays) * 24 * time.Hour)
 	app.SetMouseWheelLines(cfg.Appearance.MouseWheelLines)
@@ -1455,7 +1463,7 @@ func run() error {
 				log.Printf("Warning: UnreadChannels: %v", err)
 				return nil
 			}
-			return railUnreadWorkspaces(unread, router.ByID)
+			return railUnreadWorkspaces(unread, railTeamIDs, router.ByID, railThreadsUnread(db))
 		}
 		app.SetUnreadService(core.NewUnreadService(channelReadStates, unreadWorkspaces))
 
@@ -4092,7 +4100,7 @@ func xdgCache() string {
 // state from Slack, populates the WorkspaceContext, and sends an initial
 // StatusChangeMsg. Also subscribes to presence_change events for the self
 // user and every DM peer so external state changes arrive over the WS.
-func bootstrapPresenceAndDND(ctx context.Context, wctx *WorkspaceContext, program *tea.Program) {
+func bootstrapPresenceAndDND(ctx context.Context, wctx *WorkspaceContext, program teaSender) {
 	if wctx == nil || wctx.Client == nil {
 		return
 	}
@@ -4209,7 +4217,9 @@ func mostRecentlyVisitedChannel(visits map[string]int64) string {
 // rtmEventHandler bridges WebSocket events into bubbletea messages via p.Send()
 // and caches all incoming messages to the SQLite database.
 type rtmEventHandler struct {
-	program     *tea.Program
+	// program is the running *tea.Program, narrowed to teaSender so
+	// tests can capture what the handler dispatches.
+	program     teaSender
 	userNames   map[string]string
 	tsFormat    string
 	db          *cache.DB
@@ -4886,10 +4896,19 @@ func (h *rtmEventHandler) OnThreadMarked(channelID, threadTS, lastRead string, s
 		}
 	}
 
-	// UI dispatch is active-only: the threads-view list and sidebar
-	// badge live on the active workspace; inactive workspaces pick up
-	// fresh state on the next switch via threadsListFetcher.
+	// The list and badge dispatch below is active-only: they live on
+	// the active workspace, and an inactive one picks them up on the
+	// next switch via threadsListFetcher. The rail is not: its thread
+	// half reads the last_read written above (railThreadsUnread), so
+	// a thread read in another client while the user is on a
+	// different workspace must reach it now, or the dot stays lit
+	// until an unrelated event. ReadStateChangedMsg is what
+	// notifyReadStateChanged answers to, the same choice
+	// muteRefreshMsg makes for an inactive mute change.
 	if h.isActive != nil && !h.isActive() {
+		if h.program != nil {
+			h.program.Send(ui.ReadStateChangedMsg{WorkspaceID: h.workspaceID})
+		}
 		return
 	}
 	if h.program == nil {
@@ -4934,12 +4953,18 @@ func (h *rtmEventHandler) OnThreadSubscriptionChanged(channelID, threadTS, lastR
 				channelID, threadTS, err)
 		}
 	}
-	// UI refresh is filtered by team in the App.Update handler, so
-	// it's safe (and harmless) to dispatch for inactive workspaces
-	// too — but we still skip it when isActive is wired and false to
-	// avoid waking the UI loop for no-op refreshes. The DB write
-	// above ensures correctness on the eventual switch.
+	// The threads-list refresh is filtered by team in App.Update, so
+	// dispatching it for an inactive workspace would only wake the UI
+	// loop for a no-op; the DB write above is what the eventual switch
+	// reads. The rail is different: its thread half reads the row just
+	// upserted (railThreadsUnread), and an auto-subscription from an
+	// @-mention may be a new unread thread to light, an unsubscribe
+	// one to stop lighting. Same send as OnThreadMarked's inactive
+	// branch.
 	if h.isActive != nil && !h.isActive() {
+		if h.program != nil {
+			h.program.Send(ui.ReadStateChangedMsg{WorkspaceID: h.workspaceID})
+		}
 		return
 	}
 	if h.program != nil {
