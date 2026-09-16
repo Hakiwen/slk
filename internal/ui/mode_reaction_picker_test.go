@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/reactionpicker"
@@ -69,7 +70,7 @@ func openReactionPicker(calls *reactionCalls, frecent ...string) func(*testing.T
 			entries = append(entries, reactionpicker.EmojiEntry{Name: n})
 		}
 		a.SetCurrentUserID(reactionTestUserID)
-		a.SetReactionService(NewReactionService(
+		a.SetReactionService(core.NewReactionService(
 			func(_ ids.ChannelID, _ ids.MessageTS, emoji string) error {
 				calls.added = append(calls.added, emoji)
 				return errReactionFailed

@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/text"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/muesli/reflow/truncate"
 )
@@ -62,6 +63,9 @@ type ChannelItem struct {
 	IsStarred    bool
 	Presence     string // for DMs: active, away, dnd
 	DMUserID     string // for DMs: the user ID of the other party
+	// Status is the DM peer's custom status and DND state, kept current
+	// by UpdateStatusByUser / UpdateDNDByUser the same way Presence is.
+	Status peerstatus.Status
 	// IsMuted reports whether the user has muted this channel (via
 	// Slack's muted_channels user pref). Muted channels render with a
 	// dimmer foreground and suppress their unread dot; they also do
@@ -83,7 +87,7 @@ type ChannelItem struct {
 // this helper rather than re-deriving the rule.
 //
 // Scoped to the dot deliberately: mentions pierce mute. See MentionBadge.
-func (item ChannelItem) IsVisiblyUnread(state cache.ReadState) bool {
+func (item ChannelItem) IsVisiblyUnread(state core.ReadState) bool {
 	return state.HasUnread && !item.IsMuted
 }
 
@@ -101,7 +105,7 @@ func (item ChannelItem) IsVisiblyUnread(state cache.ReadState) bool {
 //
 // The 99+ cap is applied by the renderer, not here: the DB keeps the true
 // count so a later refresh below 100 shows the real number.
-func (item ChannelItem) MentionBadge(state cache.ReadState) int {
+func (item ChannelItem) MentionBadge(state core.ReadState) int {
 	if !state.HasUnread {
 		return 0
 	}
@@ -249,6 +253,9 @@ type Model struct {
 	// via ResetPresence. Also remembers events that arrive before their DM
 	// item exists (startup race) so they apply once the item is set.
 	presenceByUser map[string]string
+	// statusByUser is presenceByUser's counterpart for custom status and
+	// DND, with the same survive-rebuilds contract.
+	statusByUser map[string]peerstatus.Status
 
 	// Flat list of navigable stops in display order: threads row,
 	// section headers, and channel rows belonging to expanded sections.
@@ -274,7 +281,7 @@ type Model struct {
 	// active workspace, keyed by channel ID. Set by App via
 	// SetReadStateReader. May be nil — nil means "treat everything as
 	// no-unread" (used during early construction).
-	readStateReader func() map[string]cache.ReadState
+	readStateReader func() map[string]core.ReadState
 	// collapseByID parallels `collapsed` for Slack-mode (ID-keyed).
 	// Renames preserve collapse state because the ID is stable.
 	// Populated lazily; lookups treat nil as empty. Used in Task 9.
@@ -349,7 +356,7 @@ func (m *Model) SetSectionsProvider(p SectionsProvider) {
 // read state map for the workspace currently presented by this sidebar.
 // Called by View() at render time. Setting it invalidates the row cache
 // so the next render reflects the new source.
-func (m *Model) SetReadStateReader(f func() map[string]cache.ReadState) {
+func (m *Model) SetReadStateReader(f func() map[string]core.ReadState) {
 	m.readStateReader = f
 	m.cacheValid = false
 	m.dirty()
@@ -744,11 +751,12 @@ func (m *Model) SetItems(items []ChannelItem) {
 	m.dirty()
 }
 
-// applyPresence overwrites each DM item's Presence with the authoritative
-// live value from presenceByUser, so a rebuild that supplies stale/default
-// presence doesn't clobber the real state. No-op when no presence is known.
+// applyPresence overwrites each DM item's Presence and Status with the
+// authoritative live values from presenceByUser and statusByUser, so a
+// rebuild that supplies stale/default state doesn't clobber the real
+// state. No-op when nothing is known.
 func (m *Model) applyPresence() {
-	if len(m.presenceByUser) == 0 {
+	if len(m.presenceByUser) == 0 && len(m.statusByUser) == 0 {
 		return
 	}
 	for i := range m.items {
@@ -759,14 +767,19 @@ func (m *Model) applyPresence() {
 		if p, ok := m.presenceByUser[uid]; ok {
 			m.items[i].Presence = p
 		}
+		if st, ok := m.statusByUser[uid]; ok {
+			m.items[i].Status = st
+		}
 	}
 }
 
-// ResetPresence forgets all remembered per-user presence. Called on
-// workspace switch so the newly-active workspace starts from its own
-// cache-seeded item presence rather than the previous workspace's peers.
+// ResetPresence forgets all remembered per-user presence, status and
+// DND. Called on workspace switch so the newly-active workspace starts
+// from its own cache-seeded items rather than the previous workspace's
+// peers.
 func (m *Model) ResetPresence() {
 	m.presenceByUser = nil
+	m.statusByUser = nil
 }
 
 // UpsertItem inserts a new ChannelItem keyed by ID, or updates an existing
@@ -786,6 +799,9 @@ func (m *Model) UpsertItem(item ChannelItem) {
 	if item.DMUserID != "" {
 		if p, ok := m.presenceByUser[item.DMUserID]; ok {
 			item.Presence = p
+		}
+		if st, ok := m.statusByUser[item.DMUserID]; ok {
+			item.Status = st
 		}
 	}
 	for i := range m.items {
@@ -957,6 +973,85 @@ func (m *Model) UpdatePresenceByUser(userID, presence string) {
 	}
 }
 
+// UpdateStatusByUser records a user's custom status with
+// UpdatePresenceByUser's contract: remembered across SetItems rebuilds
+// and applied to DM rows that appear later. DND is left as it was.
+func (m *Model) UpdateStatusByUser(userID, emoji, text string, expires time.Time) {
+	if userID == "" {
+		return
+	}
+	m.setStatus(userID, m.statusFor(userID).WithStatus(emoji, text, expires))
+}
+
+// UpdateHuddleByUser records a user's huddle state; see
+// UpdateStatusByUser. Status and DND are left as they were.
+func (m *Model) UpdateHuddleByUser(userID, state string, expires time.Time) {
+	if userID == "" {
+		return
+	}
+	m.setStatus(userID, m.statusFor(userID).WithHuddle(state, expires))
+}
+
+// UpdateDNDByUser records a user's DND state; see UpdateStatusByUser.
+// The custom status is left as it was.
+func (m *Model) UpdateDNDByUser(userID string, on bool, end time.Time) {
+	if userID == "" {
+		return
+	}
+	m.setStatus(userID, m.statusFor(userID).WithDND(on, end))
+}
+
+// statusFor is the current status for userID: the remembered live value,
+// else the cache-seeded value on its DM row.
+func (m *Model) statusFor(userID string) peerstatus.Status {
+	if st, ok := m.statusByUser[userID]; ok {
+		return st
+	}
+	for i := range m.items {
+		if m.items[i].DMUserID == userID {
+			return m.items[i].Status
+		}
+	}
+	return peerstatus.Status{}
+}
+
+func (m *Model) setStatus(userID string, st peerstatus.Status) {
+	if m.statusByUser == nil {
+		m.statusByUser = make(map[string]peerstatus.Status)
+	}
+	m.statusByUser[userID] = st
+	for i := range m.items {
+		if m.items[i].DMUserID == userID && m.items[i].Status != st {
+			m.items[i].Status = st
+			m.cacheValid = false
+			m.dirty()
+		}
+	}
+}
+
+// ExpireStatuses drops custom statuses and DND whose deadline has passed
+// and reports whether any DM row changed, so a periodic tick repaints
+// only when something actually expired.
+func (m *Model) ExpireStatuses(now time.Time) bool {
+	for uid, st := range m.statusByUser {
+		if st.Expired(now) {
+			m.statusByUser[uid] = st.Clear(now)
+		}
+	}
+	changed := false
+	for i := range m.items {
+		if st := m.items[i].Status; st.Expired(now) {
+			m.items[i].Status = st.Clear(now)
+			changed = true
+		}
+	}
+	if changed {
+		m.cacheValid = false
+		m.dirty()
+	}
+	return changed
+}
+
 func (m *Model) SelectByID(id string) {
 	// Fast path: the channel is already in nav (its section is expanded).
 	for i, n := range m.nav {
@@ -1021,7 +1116,7 @@ func (m *Model) rebuildFilter() {
 	// nil-safe: when no reader is installed (early construction, some
 	// tests) every lookup returns the zero value and IsStale's
 	// type-aware empty-LastReadTS branch handles it.
-	var readState map[string]cache.ReadState
+	var readState map[string]core.ReadState
 	if m.readStateReader != nil {
 		readState = m.readStateReader()
 	}
@@ -1191,7 +1286,7 @@ func (m *Model) rebuildNavPreserveCursor() {
 // unmuted channel in the section is holding a mention, the header must
 // shout as loudly as that row would.
 func (m *Model) aggregateForSection(section string) (unread, mentions int, allMuted bool) {
-	var readState map[string]cache.ReadState
+	var readState map[string]core.ReadState
 	if m.readStateReader != nil {
 		readState = m.readStateReader()
 	}
@@ -1281,7 +1376,7 @@ func (m *Model) buildCache(width int) {
 	// is no longer consulted by rendering. A nil reader (early
 	// construction, tests without wiring) means "treat everything as
 	// no-unread" — lookups on a nil map return the zero ReadState.
-	var readState map[string]cache.ReadState
+	var readState map[string]core.ReadState
 	if m.readStateReader != nil {
 		readState = m.readStateReader()
 	}
@@ -1329,6 +1424,9 @@ func (m *Model) buildCache(width int) {
 	privatePrefixMuted := "◆ "
 	dmActivePrefix := styles.PresenceOnline.Render("● ")
 	dmAwayPrefix := styles.PresenceAway.Render("○ ")
+	// DND replaces the presence dot, like Slack's badge on the avatar.
+	dmDNDPrefix := lipgloss.NewStyle().Foreground(styles.Warning).Render(peerstatus.DNDGlyph + " ")
+	statusNow := time.Now()
 	// Apps use a filled square glyph to visually distinguish them from
 	// human DMs (which use a circle). No presence concept for apps --
 	// they're always "available". Two variants mirror the private-channel
@@ -1458,9 +1556,12 @@ func (m *Model) buildCache(width int) {
 		var prefix string
 		switch item.Type {
 		case "dm":
-			if item.Presence == "active" {
+			switch {
+			case item.Status.InDND(statusNow):
+				prefix = dmDNDPrefix
+			case item.Presence == "active":
 				prefix = dmActivePrefix
-			} else {
+			default:
 				prefix = dmAwayPrefix
 			}
 		case "group_dm":
@@ -1498,12 +1599,23 @@ func (m *Model) buildCache(width int) {
 		// stays inside the loop.
 		const rowChromeExcludingTrailer = 6 // cursor(2) + prefix(3) + space(1)
 		name := item.Name
-		maxNameLen := (width - 2) - rowChromeExcludingTrailer - trailerCells
+		// A DM peer's status emoji follows the name after a space. It is
+		// charged to the name's budget so a long name truncates instead
+		// of pushing the emoji or the trailer off the row.
+		statusGlyph := item.Status.Glyph(statusNow)
+		statusCells := 0
+		if statusGlyph != "" {
+			statusCells = 1 + item.Status.GlyphWidth(statusNow)
+		}
+		maxNameLen := (width - 2) - rowChromeExcludingTrailer - trailerCells - statusCells
 		if maxNameLen < 5 {
 			maxNameLen = 5
 		}
 		if lipgloss.Width(name) > maxNameLen {
 			name = truncate.StringWithTail(name, uint(maxNameLen), "…")
+		}
+		if statusGlyph != "" {
+			name += " " + statusGlyph
 		}
 
 		// Three label variants: selected (cursor, green ▌), active

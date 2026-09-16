@@ -161,11 +161,11 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		var cmd tea.Cmd
 		if channelID != "" && m.ThreadTS != "" {
-			cmd = a.threads.Mark(
+			cmd = teaCmd(a.threads.Mark(
 				ids.ChannelID(channelID),
 				ids.ThreadTS(m.ThreadTS),
 				ids.MessageTS(latestTS),
-			)
+			))
 			if cmd != nil {
 				// Record BEFORE the cmd runs, i.e. before the mark is
 				// issued: Slack's thread_marked broadcast races the
@@ -229,11 +229,25 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 
 	case ThreadsListLoadedMsg:
 		if m.TeamID != a.activeTeamID {
+			// The list cannot go on screen: the user has switched
+			// away since the fetch was issued. It is still the tail
+			// of a thread change dispatched while that workspace was
+			// active, the switch did not recompute the rail
+			// (reduceWorkspaceSwitched only swaps the channel list),
+			// and the rail's thread half reads the rows this list was
+			// read from -- so refresh the dot, or the change never
+			// reaches it.
+			a.notifyReadStateChanged()
 			return nil, true
 		}
 		a.threadsView.SetSummaries(m.Summaries)
 		a.threadsView.SetSubscriptionsAvailable(m.SubscriptionsAvailable)
 		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
+		// The badge and the rail's thread half count the same query
+		// (cache.ListSubscribedThreads); recompute the rail at the
+		// moment the badge changes so the two cannot disagree for the
+		// workspace the user is looking at.
+		a.notifyReadStateChanged()
 		if a.view != ViewThreads {
 			return nil, true
 		}
@@ -248,6 +262,15 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		// Team check first: a dirty message for another workspace must
 		// not take the coalescing window from the active one.
 		if m.TeamID != a.activeTeamID {
+			// No fetch, the list is not on screen; but the rows the
+			// sender changed are the rows the rail's thread half reads,
+			// and for the subscription reconcile (boot, reconnect,
+			// wake: ensureWorkspaceThreadSubs in cmd/slk) this is the
+			// only signal an inactive workspace gets. It lands after
+			// WorkspaceReadyMsg's refresh, so without this a thread
+			// read elsewhere while slk was closed kept its dot until
+			// an unrelated event.
+			a.notifyReadStateChanged()
 			return nil, true
 		}
 		// Drop it if a refresh is already waiting: that fetch has not

@@ -98,7 +98,7 @@ func appendBlock(out *RenderResult, b Block, ctx Context, width int) {
 		// Other block types (Context, Image, Actions) are added by
 		// later tasks; for now, render them as unsupported so the
 		// package is total even mid-implementation.
-		out.Lines = append(out.Lines, renderUnsupported(v.blockType(), width))
+		out.Lines = append(out.Lines, renderUnsupported(blockType(v), width))
 	}
 }
 

@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/ui"
@@ -47,6 +49,43 @@ func TestOnConversationOpened_AppendsAndSends(t *testing.T) {
 	}
 	if len(wctx.FinderItems) != 2 {
 		t.Errorf("len(FinderItems) = %d, want 2", len(wctx.FinderItems))
+	}
+}
+
+// TestOnConversationOpened_SeedsDMStatusFromCache: a DM opened mid-session
+// shows its peer's cached status, as DMs seeded at startup do.
+func TestOnConversationOpened_SeedsDMStatusFromCache(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertWorkspace(cache.Workspace{ID: "T1", Name: "T1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertUser(cache.User{ID: "U1", WorkspaceID: "T1", Name: "alice", StatusEmoji: ":calendar:", StatusText: "In a meeting"}); err != nil {
+		t.Fatal(err)
+	}
+	wctx := &WorkspaceContext{
+		BotUserIDs:        map[string]bool{},
+		UserNames:         map[string]string{"U1": "alice"},
+		UserNamesByHandle: map[string]string{},
+	}
+	h := &rtmEventHandler{
+		wsCtx:        wctx,
+		db:           db,
+		workspaceID:  "T1",
+		cfg:          config.Config{},
+		channelNames: map[string]string{},
+		channelTypes: map[string]string{},
+	}
+	h.OnConversationOpened(slack.Channel{
+		GroupConversation: slack.GroupConversation{
+			Conversation: slack.Conversation{ID: "D1", IsIM: true, User: "U1"},
+		},
+	})
+
+	if len(wctx.Channels) != 1 {
+		t.Fatalf("len(Channels) = %d, want 1", len(wctx.Channels))
+	}
+	if got := wctx.Channels[0].Status; got.Emoji != ":calendar:" || got.Text != "In a meeting" {
+		t.Errorf("opened DM status = %+v, want the cached status", got)
 	}
 }
 
@@ -551,6 +590,65 @@ func TestOnThreadMarked_PersistsOnInactiveWorkspace(t *testing.T) {
 	if got[0].ChannelID != "C1" || got[0].ThreadTS != "1700000100.000000" ||
 		got[0].LastRead != "1700000150.000000" || !got[0].Active {
 		t.Fatalf("subscription row mismatch on inactive workspace: %+v", got[0])
+	}
+}
+
+// TestOnThreadMarked_InactiveWorkspaceRefreshesRail pins the send the
+// inactive branch used to skip. The rail's thread half reads the
+// last_read this handler just wrote, so a thread read in another
+// client while the user is on a different workspace must reach the
+// rail, and ReadStateChangedMsg is what notifyReadStateChanged answers
+// to (the pattern refreshMutedForActive's inactive case uses). The
+// active-only messages must still stay out: there is no list or badge
+// on screen for this workspace.
+func TestOnThreadMarked_InactiveWorkspaceRefreshesRail(t *testing.T) {
+	db := newTestDB(t)
+	sender := &captureSender{}
+	h := &rtmEventHandler{
+		db:          db,
+		workspaceID: "T1",
+		isActive:    func() bool { return false },
+		program:     sender,
+	}
+
+	h.OnThreadMarked("C1", "1700000100.000000", "1700000150.000000", true)
+
+	assertOnlyRailRefresh(t, sender.sent)
+}
+
+// TestOnThreadSubscriptionChanged_InactiveWorkspaceRefreshesRail is the
+// same guard for thread_subscribed / thread_unsubscribed: an
+// auto-subscription from an @-mention in an inactive workspace is a new
+// subscribed thread the rail may need to light, and an unsubscribe one
+// it may need to stop lighting.
+func TestOnThreadSubscriptionChanged_InactiveWorkspaceRefreshesRail(t *testing.T) {
+	db := newTestDB(t)
+	sender := &captureSender{}
+	h := &rtmEventHandler{
+		db:          db,
+		workspaceID: "T1",
+		isActive:    func() bool { return false },
+		program:     sender,
+	}
+
+	h.OnThreadSubscriptionChanged("C1", "1700000100.000000", "1700000150.000000", true)
+
+	assertOnlyRailRefresh(t, sender.sent)
+}
+
+// assertOnlyRailRefresh checks that an inactive-workspace thread event
+// dispatched exactly one ReadStateChangedMsg for T1 and nothing else.
+func assertOnlyRailRefresh(t *testing.T, sent []tea.Msg) {
+	t.Helper()
+	if len(sent) != 1 {
+		t.Fatalf("sent %d messages, want exactly one ReadStateChangedMsg: %+v", len(sent), sent)
+	}
+	rs, ok := sent[0].(ui.ReadStateChangedMsg)
+	if !ok {
+		t.Fatalf("sent %T, want ui.ReadStateChangedMsg", sent[0])
+	}
+	if rs.WorkspaceID != "T1" {
+		t.Errorf("ReadStateChangedMsg.WorkspaceID = %q, want T1", rs.WorkspaceID)
 	}
 }
 

@@ -344,7 +344,12 @@ func revalidateUsers(ctx context.Context, deps Deps, out *Result, logf func(stri
 		return
 	}
 
+	// Counts of each huddle_state value, logged without user IDs, so a
+	// debug run shows if Slack starts sending a value other than
+	// "in_a_huddle" and "default_unset".
+	huddleStates := map[string]int{}
 	for _, u := range users {
+		huddleStates[u.Profile.HuddleState]++
 		if err := deps.Store.UpdateUserFromEdge(cache.EdgeUserUpdate{
 			ID:          u.ID,
 			Name:        u.Name,
@@ -356,11 +361,19 @@ func revalidateUsers(ctx context.Context, deps Deps, out *Result, logf func(stri
 			AvatarURL:  u.Profile.ImageOriginal,
 			IsBot:      u.IsBot,
 			IsExternal: isExternal(u, deps.WorkspaceID),
-			Version:    u.Version,
+			// Always written, empty included: users/info carries
+			// the status keys empty when no status is set.
+			StatusEmoji:      u.Profile.StatusEmoji,
+			StatusText:       u.Profile.StatusText,
+			StatusExpiration: u.Profile.StatusExpiration,
+			HuddleState:      u.Profile.HuddleState,
+			HuddleExpiration: u.Profile.HuddleStateExpirationTS,
+			Version:          u.Version,
 		}); err != nil {
 			logf("bootstrap: caching revalidated user %s: %v", u.ID, err)
 		}
 	}
+	logf("bootstrap: users/info huddle_state values across %d users: %v", len(users), huddleStates)
 }
 
 // conditionalVersions builds the {id: version} map a cache endpoint

@@ -19,8 +19,8 @@
 //	                          compose draft), push new channels/users/
 //	                          emoji, apply theme, restore the last
 //	                          channel viewed for this workspace.
-//	ConversationOpenedMsg   - WS event: a DM/MPIM just opened.
-//	                          Upsert into the active sidebar.
+//	ConversationOpenedMsg   - WS event: a conversation just opened.
+//	                          Upsert into the active sidebar and finder.
 //	SectionsRefreshedMsg    - cache notice: sidebar sections were
 //	                          reorganized. Re-push channel items
 //	                          for the active workspace.
@@ -74,10 +74,17 @@ var reduceWorkspace reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 	case ConversationOpenedMsg:
 		if m.TeamID == a.activeTeamID {
 			a.sidebar.UpsertItem(m.Item)
+			// FinderItem is populated by today's one sender
+			// (cmd/slk's rtmEventHandler); guard against a future
+			// sender that forgets to set it, which would otherwise
+			// silently append an ID: "" row to the finder.
+			if m.FinderItem.ID != "" {
+				a.channelFinder.Upsert(m.FinderItem)
+			}
 		}
 		// Inactive-workspace events update WorkspaceContext.Channels
-		// from the rtmEventHandler in cmd/slk/main.go (Task 6);
-		// App.Update only mutates the active sidebar.
+		// and FinderItems from the rtmEventHandler in cmd/slk/main.go;
+		// App.Update only mutates the active workspace's UI models.
 		return nil, true
 
 	case SectionsRefreshedMsg:
@@ -207,6 +214,7 @@ func reduceWorkspaceReady(a *App, m WorkspaceReadyMsg) tea.Cmd {
 		// SetUserNames last is the canonical state.
 		a.SetExternalUsers(m.ExternalUsers)
 		a.SetUserNames(m.UserNames)
+		batch = append(batch, a.presence.SetPeers(a, m.UserStatuses))
 		a.SetCustomEmoji(m.CustomEmoji)
 		a.SetUserGroups(m.UserGroups)
 		// Route through the setter so messagepane/threadPanel also learn
@@ -352,6 +360,8 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	a.workspaceRail.SelectByID(m.TeamID)
 
 	var batch []tea.Cmd
+	// After resetWindowTree above, so the fresh panes get the statuses.
+	batch = append(batch, a.presence.SetPeers(a, m.UserStatuses))
 	// Restore the last-viewed channel for this workspace if we
 	// have one and it still exists; otherwise fall back to the
 	// first channel in the sidebar. Move the sidebar cursor to
@@ -381,5 +391,10 @@ func reduceWorkspaceSwitched(a *App, m WorkspaceSwitchedMsg) tea.Cmd {
 	threads := a.threads
 	team := ids.TeamID(m.TeamID)
 	batch = append(batch, func() tea.Msg { return threads.ListFetch(team) })
+	// Must run after ResetPresence and a.activeTeamID above, so its
+	// UserDNDChangeMsg result isn't wiped or dropped as stale.
+	if m.RefreshPeerDND != nil {
+		batch = append(batch, m.RefreshPeerDND)
+	}
 	return tea.Batch(batch...)
 }

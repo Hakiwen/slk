@@ -8,22 +8,16 @@ import (
 	"log"
 	"mime"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
-	"unicode"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/cache"
-	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/emoji"
-	"github.com/gammons/slk/internal/export"
-	"github.com/gammons/slk/internal/filedl"
 	"github.com/gammons/slk/internal/ids"
 	imgpkg "github.com/gammons/slk/internal/image"
 	"github.com/gammons/slk/internal/slackurl"
@@ -52,7 +46,6 @@ import (
 	"github.com/gammons/slk/internal/ui/workspace"
 	"github.com/gammons/slk/internal/ui/workspacefinder"
 	"github.com/gammons/slk/internal/usergroups"
-	"golang.design/x/clipboard"
 )
 
 type Panel int
@@ -193,19 +186,16 @@ type App struct {
 	// channels API + local cache + session bookkeeping). See
 	// internal/ui/services.go. Defaulted to a no-op adapter in
 	// NewApp so call sites can dispatch without nil-checks.
-	channels ChannelService
+	channels core.ChannelService
 	// messages is the App's MessageService collaborator (send / edit /
 	// delete / mark-unread / permalink). See internal/ui/services.go.
 	// Defaulted to a no-op adapter in NewApp so call sites can dispatch
 	// without nil-checks.
-	messageSvc MessageService
+	messageSvc core.MessageService
 
-	uploader UploadFunc
-
-	// statusReport mirrors slk's unread state onto an external surface,
-	// invoked by notifyReadStateChanged on every read-state change. Nil unless
-	// a status_command is configured (config: notifications.status_command).
-	statusReport StatusReportFunc
+	// files uploads and downloads attachments. Nil until wired; both
+	// paths toast when it is unset.
+	files core.FileService
 
 	// clipboardAvailable is set from the native clipboard reader's startup
 	// result. It gates Ctrl+V smart-paste only; OSC 52 writes do not depend on
@@ -216,9 +206,14 @@ type App struct {
 	// by ui.ResolveEditor (editor.go). Nil means unconfigured.
 	composeEditor []string
 
-	// clipboardRead is the function used by smartPaste to read OS clipboard
-	// contents. Tests inject fakes via SetClipboardReader.
-	clipboardRead clipboardReader
+	// editor hands Ctrl+E's draft to composeEditor and back. A no-op
+	// until wired.
+	editor core.EditorService
+
+	// desktop is the host OS: opening links and files, clipboard reads,
+	// paste-a-path stats, thread export and the status command. A no-op
+	// until wired.
+	desktop core.DesktopService
 
 	// clipboardWrite creates OSC 52 write commands for permalink and drag-copy
 	// actions. Tests inject fakes via SetClipboardWriter.
@@ -229,7 +224,7 @@ type App struct {
 	// unread boundary). See internal/ui/services.go. Defaulted to a
 	// no-op adapter in NewApp so call sites can dispatch without
 	// nil-checks.
-	threads ThreadService
+	threads core.ThreadService
 
 	threadsDirtyDebounce time.Duration
 
@@ -391,10 +386,6 @@ type App struct {
 	// linkPicker is the open-link choice modal (issue #62).
 	linkPicker *linkpicker.Model
 
-	// fileDownloader downloads file attachments for the `d`
-	// keybinding. Nil in tests; downloadFileCmd toasts when unset.
-	fileDownloader *filedl.Downloader
-
 	// pickerKind records what the linkpicker modal is choosing:
 	// "links" (Enter dispatches OpenLinkMsg) or "files" (Enter
 	// dispatches DownloadFileMsg from pickerFiles).
@@ -409,7 +400,7 @@ type App struct {
 	// reactions on Slack + load/record frecent emoji history). See
 	// internal/ui/services.go. Defaulted to a no-op adapter in NewApp
 	// so call sites can dispatch without nil-checks.
-	reactions     ReactionService
+	reactions     core.ReactionService
 	currentUserID string
 
 	// editing tracks in-progress message edit state. See
@@ -428,8 +419,8 @@ type App struct {
 	newMessageCancelled bool
 
 	// Workspace switching
-	workspaceSwitcher SwitchWorkspaceFunc
-	workspaceItems    []workspace.WorkspaceItem // cached for lookup
+	workspaceSvc   core.WorkspaceService
+	workspaceItems []workspace.WorkspaceItem // cached for lookup
 	// lastChannelByTeam remembers the active channel ID per workspace so
 	// that switching back to a workspace returns to the same channel the
 	// user was last viewing there. Saved at the start of every workspace
@@ -458,7 +449,7 @@ type App struct {
 	search      *activeSearch
 	searchInput string
 	searchGen   uint64
-	searchSvc   SearchService
+	searchSvc   core.SearchService
 
 	// browserOpener launches a URL in the OS browser. Defaults to
 	// openURLCmd; tests inject fakes.
@@ -470,21 +461,17 @@ type App struct {
 	// stacks are session-only by design.
 	navHistory *navHistoryStore
 
-	// Theme switching
-	themeSaveFn    func(name string, scope themeswitcher.ThemeScope)
-	themeOverrides config.Theme
-
-	// Sidebar width persistence
-	widthSaveFn func(width int)
+	// settings persists the theme choice and sidebar width. Nil until wired.
+	settings       core.SettingsService
+	themeOverrides core.Theme
 
 	// presence owns per-workspace presence/DND cache, the DND-tick
 	// guard, and the custom-snooze numeric input buffer. See
 	// internal/ui/presence.go.
 	presence *presenceController
-	// setStatusFn is the callback invoked when the user picks a presence-
-	// menu action; it runs the Slack API call for the active workspace.
-	// Wired by cmd/slk/main.go via SetStatusSetter.
-	setStatusFn func(action presencemenu.Action, snoozeMinutes int)
+	// presenceSvc sets the user's status on Slack and sends typing
+	// events. Nil until wired.
+	presenceSvc core.PresenceService
 
 	// typing owns both inbound typing-indicator state (other users
 	// typing in channels) and outbound typing-send throttle. See
@@ -533,7 +520,7 @@ type App struct {
 	// pane; the App uses it to load the larger thumb when the user
 	// opens the full-screen preview overlay. Wired via SetImageFetcher
 	// from main.go, after Detect / cache construction.
-	imageFetcher *imgpkg.Fetcher
+	imageFetcher core.ImageFetcher
 
 	// imgProtocol is the active terminal image protocol detected at
 	// startup. Used to render the full-screen preview overlay.
@@ -796,9 +783,9 @@ func NewApp() *App {
 		searchSvc:             noopSearchService,
 		lastChannelByTeam:     map[string]string{},
 		workspaceDomains:      map[string]string{},
-		browserOpener:         openURLCmd,
+		desktop:               noopDesktopService,
+		editor:                noopEditorService,
 		navHistory:            newNavHistoryStore(),
-		clipboardRead:         defaultClipboardReader,
 		clipboardWrite:        defaultClipboardWriter,
 	}
 	// Root model deliberately bypasses newWindowModel: the config
@@ -814,6 +801,7 @@ func NewApp() *App {
 	// reference sibling fields.
 	app.typing = newTypingTracker()
 	app.typingOut = newTypingBroadcaster(app.typing)
+	app.browserOpener = app.openURLCmd
 	// Seed the picker with built-in emojis so the autocomplete works even
 	// before the first workspace finishes loading customs.
 	app.compose.SetEmojiEntries(emoji.BuildEntries(nil))
@@ -914,7 +902,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				path := a.preview.Overlay().Path()
 				a.preview.Close()
-				return a, openInSystemViewerCmd(path)
+				return a, a.openInSystemViewerCmd(path)
 			case "h", "left":
 				if a.preview.Overlay().SiblingCount() > 1 {
 					return a, a.cycleImagePreviewCmd(a.preview.Channel(), a.preview.TS(), a.preview.AttIdx(), -1)
@@ -1487,42 +1475,14 @@ func (a *App) saveThreadToFile() tea.Cmd {
 		}
 	}
 
+	desktop := a.desktop
 	return func() tea.Msg {
-		content := export.ThreadToMarkdown(parent, replies, userNames, channelNames)
-
-		dir, err := export.ExportDir()
+		path, err := desktop.SaveThread(parent, replies, userNames, channelNames, channelName)
 		if err != nil {
-			return statusbar.ThreadSaveFailedMsg{Reason: err.Error()}
-		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return statusbar.ThreadSaveFailedMsg{Reason: err.Error()}
-		}
-		filename := fmt.Sprintf("slk-thread-%s-%s.md", sanitizeForFilename(channelName), time.Now().Format("2006-01-02-150405"))
-		path := filepath.Join(dir, filename)
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			return statusbar.ThreadSaveFailedMsg{Reason: err.Error()}
 		}
 		return statusbar.ThreadSavedMsg{Path: path}
 	}
-}
-
-func sanitizeForFilename(s string) string {
-	var b strings.Builder
-	prev := false
-	for _, r := range s {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
-			b.WriteRune(r)
-			prev = false
-		} else if !prev {
-			b.WriteByte('-')
-			prev = true
-		}
-	}
-	result := strings.Trim(b.String(), "-")
-	if result == "" {
-		return "unknown"
-	}
-	return result
 }
 
 // scrollFlushInterval is the coalescing window for held j/k selection
@@ -2280,11 +2240,11 @@ func (a *App) flushPendingMarks() tea.Cmd {
 	}
 	if pt := a.pendingThreadMark; pt.ts != "" {
 		a.pendingThreadMark = pendingThreadMarkState{}
-		if c := a.threads.Mark(
+		if c := teaCmd(a.threads.Mark(
 			ids.ChannelID(pt.channelID),
 			ids.ThreadTS(pt.threadTS),
 			ids.MessageTS(pt.ts),
-		); c != nil {
+		)); c != nil {
 			// Recorded before the cmd runs, symmetrically with the
 			// channel leg above: Mark only builds the cmd, so the mark
 			// has not been issued yet and this record cannot lose the
@@ -2391,7 +2351,7 @@ func (a *App) SetChannels(items []sidebar.ChannelItem) {
 // SetChannelService wires the App's ChannelService collaborator
 // (Slack channels API + local cache + session bookkeeping). Build
 // one via NewChannelService from a ChannelServiceFuncs bundle.
-func (a *App) SetChannelService(s ChannelService) {
+func (a *App) SetChannelService(s core.ChannelService) {
 	if s == nil {
 		s = noopChannelService
 	}
@@ -2400,7 +2360,7 @@ func (a *App) SetChannelService(s ChannelService) {
 
 // SetSearchService injects the search backend (wired by cmd/slk).
 // Build one via NewSearchService from a SearchServiceFuncs bundle.
-func (a *App) SetSearchService(s SearchService) {
+func (a *App) SetSearchService(s core.SearchService) {
 	if s == nil {
 		s = noopSearchService
 	}
@@ -2424,17 +2384,17 @@ func (a *App) clearActiveSearch() {
 // SetMessageService wires the App's MessageService collaborator
 // (send / edit / delete / mark-unread / permalink). Build one via
 // NewMessageService from a MessageServiceFuncs bundle.
-func (a *App) SetMessageService(s MessageService) {
+func (a *App) SetMessageService(s core.MessageService) {
 	if s == nil {
 		s = noopMessageService
 	}
 	a.messageSvc = s
 }
 
-// SetUploader wires the upload callback used by Ctrl+V smart-paste
-// when the user submits with attachments.
-func (a *App) SetUploader(fn UploadFunc) {
-	a.uploader = fn
+// SetFileService wires attachment uploads (submitting with Ctrl+V
+// attachments) and downloads (the `d` keybinding).
+func (a *App) SetFileService(s core.FileService) {
+	a.files = s
 }
 
 // SetClipboardAvailable reports whether native clipboard reads initialized
@@ -2449,15 +2409,21 @@ func (a *App) SetComposeEditor(editor []string) {
 	a.composeEditor = editor
 }
 
-// SetClipboardReader replaces the clipboard read function. Used by
-// tests to inject canned clipboard contents. Pass nil to restore
-// the default real clipboard reader.
-func (a *App) SetClipboardReader(fn clipboardReader) {
-	if fn == nil {
-		a.clipboardRead = defaultClipboardReader
-		return
+// SetEditorService wires Ctrl+E's temp file and editor process. nil
+// restores the no-op.
+func (a *App) SetEditorService(s core.EditorService) {
+	if s == nil {
+		s = noopEditorService
 	}
-	a.clipboardRead = fn
+	a.editor = s
+}
+
+// SetDesktopService wires the host OS integration. nil restores the no-op.
+func (a *App) SetDesktopService(s core.DesktopService) {
+	if s == nil {
+		s = noopDesktopService
+	}
+	a.desktop = s
 }
 
 // SetClipboardWriter replaces the OSC 52 command factory. Used by tests to
@@ -2473,40 +2439,35 @@ func (a *App) SetClipboardWriter(fn clipboardWriter) {
 // SetThreadService wires the App's ThreadService collaborator
 // (fetch / mark / reply / list-fetch + parent-channel last-read).
 // Build one via NewThreadService from a ThreadServiceFuncs bundle.
-func (a *App) SetThreadService(s ThreadService) {
+func (a *App) SetThreadService(s core.ThreadService) {
 	if s == nil {
 		s = noopThreadService
 	}
 	a.threads = s
 }
 
-// SetReadStateReader installs a callback the sidebar (and any future
-// readers) will call at render time to fetch per-channel read state.
-// Must be set before the first render for unread dots to appear.
-func (a *App) SetReadStateReader(f func() map[string]cache.ReadState) {
-	a.sidebar.SetReadStateReader(f)
-}
-
-// SetWorkspaceUnreadReader installs the callback the workspace rail
-// uses on RefreshUnreads to learn which workspaces have at least one
-// channel their sidebar would show as unread.
-func (a *App) SetWorkspaceUnreadReader(f func() []string) {
-	a.workspaceRail.SetUnreadReader(f)
-}
-
-// SetStatusReporter installs the StatusReportFunc invoked on every unread-state
-// change to mirror slk's unread state onto an external surface (config:
-// notifications.status_command).
-func (a *App) SetStatusReporter(fn StatusReportFunc) {
-	a.statusReport = fn
+// SetUnreadService wires the read state the sidebar and workspace rail
+// render. Must be set before the first render for unread dots to appear.
+func (a *App) SetUnreadService(s core.UnreadService) {
+	if s == nil {
+		a.sidebar.SetReadStateReader(nil)
+		a.workspaceRail.SetUnreadReader(nil)
+		return
+	}
+	a.sidebar.SetReadStateReader(s.ChannelReadStates)
+	a.workspaceRail.SetUnreadReader(s.UnreadWorkspaces)
 }
 
 func (a *App) SetChannelFinderItems(items []channelfinder.Item) {
 	a.channelFinder.SetItems(items)
 }
 
-// SetAvatarFunc sets the function used to get rendered avatars for messages.
-func (a *App) SetAvatarFunc(fn messages.AvatarFunc) {
+// SetAvatarService wires the rendered avatars shown beside messages.
+func (a *App) SetAvatarService(s core.AvatarService) {
+	var fn messages.AvatarFunc
+	if s != nil {
+		fn = s.Avatar
+	}
 	a.avatarFn = fn
 	for _, m := range a.allWinModels() {
 		m.SetAvatarFunc(fn)
@@ -2578,7 +2539,7 @@ func (a *App) SetEmojiContext(ctx messages.EmojiContext) {
 
 // SetImageFetcher records the image fetcher so the preview overlay can
 // fetch large thumbs on demand. Called once at startup from main.go.
-func (a *App) SetImageFetcher(f *imgpkg.Fetcher) {
+func (a *App) SetImageFetcher(f core.ImageFetcher) {
 	a.imageFetcher = f
 }
 
@@ -2587,12 +2548,6 @@ func (a *App) SetImageFetcher(f *imgpkg.Fetcher) {
 // renderer (kitty / sixel / halfblock / off).
 func (a *App) SetImageProtocol(p imgpkg.Protocol) {
 	a.imgProtocol = p
-}
-
-// SetFileDownloader wires the file attachment downloader used by the
-// `d` keybinding.
-func (a *App) SetFileDownloader(d *filedl.Downloader) {
-	a.fileDownloader = d
 }
 
 // openImagePreviewCmd looks up the (channel, ts, attIdx) attachment in
@@ -2780,43 +2735,30 @@ func (a *App) findMessageInActiveChannel(channel, ts string) (messages.MessageIt
 // viewer for path. Uses xdg-open on Linux, open on macOS, and
 // rundll32 on Windows. Errors are logged and otherwise silent — the
 // overlay is already closed by the time this runs.
-func openInSystemViewerCmd(path string) tea.Cmd {
+func (a *App) openInSystemViewerCmd(path string) tea.Cmd {
+	desktop := a.desktop
 	return func() tea.Msg {
 		if path == "" {
 			return nil
 		}
-		if err := launchOS(path); err != nil {
+		if err := desktop.Open(path); err != nil {
 			log.Printf("system viewer launch failed: %v", err)
 		}
 		return nil
 	}
 }
 
-// launchOS starts the platform's default handler for target (a URL or
-// file path): open (macOS), rundll32 (Windows), xdg-open (Linux).
-func launchOS(target string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", target)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", target)
-	default:
-		cmd = exec.Command("xdg-open", target)
-	}
-	return cmd.Start()
-}
-
 // openURLCmd asynchronously launches the OS default browser for url.
 // Same launcher matrix as openInSystemViewerCmd (xdg-open / open /
 // rundll32). A failed launch surfaces a toast — unlike the image
 // viewer, the user otherwise gets no feedback at all.
-func openURLCmd(url string) tea.Cmd {
+func (a *App) openURLCmd(url string) tea.Cmd {
+	desktop := a.desktop
 	return func() tea.Msg {
 		if url == "" {
 			return nil
 		}
-		if err := launchOS(url); err != nil {
+		if err := desktop.Open(url); err != nil {
 			log.Printf("browser launch failed: %v", err)
 			return ToastMsg{Text: "Failed to open link"}
 		}
@@ -2828,15 +2770,15 @@ func openURLCmd(url string) tea.Cmd {
 // in the OS default app. Runs async; the user gets a toast either way.
 func (a *App) downloadFileCmd(att messages.Attachment) tea.Cmd {
 	return func() tea.Msg {
-		if a.fileDownloader == nil {
+		if a.files == nil {
 			return ToastMsg{Text: "File downloads unavailable"}
 		}
-		path, err := a.fileDownloader.Download(context.Background(), att.DownloadURL, att.Name)
+		path, err := a.files.Download(context.Background(), att.DownloadURL, att.Name)
 		if err != nil {
 			log.Printf("file download failed: %v", err)
 			return ToastMsg{Text: "Download failed: " + att.Name}
 		}
-		if err := launchOS(path); err != nil {
+		if err := a.desktop.Open(path); err != nil {
 			log.Printf("file open failed: %v", err)
 			return ToastMsg{Text: "Failed to open " + att.Name}
 		}
@@ -2976,7 +2918,7 @@ func (a *App) SetInitialChannel(channelID, channelName string, msgs []messages.M
 // The supplied service handles both reaction add/remove and frecent
 // emoji bookkeeping; build one via NewReactionService from
 // internal/ui/services.go.
-func (a *App) SetReactionService(r ReactionService) {
+func (a *App) SetReactionService(r core.ReactionService) {
 	if r == nil {
 		r = noopReactionService
 	}
@@ -3013,9 +2955,9 @@ func (a *App) ActiveChannelID() string {
 	return a.activeChannelID
 }
 
-// SetWorkspaceSwitcher sets the callback used to switch workspaces.
-func (a *App) SetWorkspaceSwitcher(fn SwitchWorkspaceFunc) {
-	a.workspaceSwitcher = fn
+// SetWorkspaceService wires workspace switching.
+func (a *App) SetWorkspaceService(s core.WorkspaceService) {
+	a.workspaceSvc = s
 }
 
 // SetThemeItems sets the available themes for the switcher.
@@ -3059,28 +3001,24 @@ func (a *App) workspaceNameForActive() string {
 	return ""
 }
 
-// SetThemeSaver sets the callback for saving the theme selection. The
-// callback receives the chosen theme name and the scope (workspace vs.
-// global) so the implementation can route to the correct save target.
-func (a *App) SetThemeSaver(fn func(name string, scope themeswitcher.ThemeScope)) {
-	a.themeSaveFn = fn
+// SetSettingsService wires persistence of the theme choice and sidebar width.
+func (a *App) SetSettingsService(s core.SettingsService) {
+	a.settings = s
 }
 
-// SetWidthSaver sets the callback for persisting the sidebar width.
-// The callback receives the current width after a resize.
-func (a *App) SetWidthSaver(fn func(width int)) {
-	a.widthSaveFn = fn
-}
-
-// SetStatusSetter registers a callback the App invokes when the user picks
-// a status action from the presence menu. The callback runs the appropriate
-// Slack API call (typically asynchronously) for the active workspace.
-func (a *App) SetStatusSetter(fn func(action presencemenu.Action, snoozeMinutes int)) {
-	a.setStatusFn = fn
+// SetPresenceService wires setting the user's own status from the presence
+// menu and broadcasting typing indicators.
+func (a *App) SetPresenceService(s core.PresenceService) {
+	a.presenceSvc = s
+	if s == nil {
+		a.typingOut.SetSender(nil)
+		return
+	}
+	a.typingOut.SetSender(s.SendTyping)
 }
 
 // SetThemeOverrides stores the config theme overrides for applying on switch.
-func (a *App) SetThemeOverrides(overrides config.Theme) {
+func (a *App) SetThemeOverrides(overrides core.Theme) {
 	a.themeOverrides = overrides
 }
 
@@ -3109,11 +3047,6 @@ func (a *App) SetMouseWheelLines(n int) {
 // before a channel is hidden; pass 0 to disable.
 func (a *App) SetSidebarStaleThreshold(d time.Duration) {
 	a.sidebar.SetStaleThreshold(d)
-}
-
-// SetTypingSender sets the callback for sending typing indicators.
-func (a *App) SetTypingSender(fn TypingSendFunc) {
-	a.typingOut.SetSender(fn)
 }
 
 // renderTypingLine returns the styled typing indicator for the current
@@ -3442,13 +3375,13 @@ func (a *App) submitWithAttachments(c *compose.Model) tea.Cmd {
 		channelID = a.activeChannelID
 		threadTS = ""
 	}
-	if channelID == "" || a.uploader == nil {
+	if channelID == "" || a.files == nil {
 		return a.uploadToastCmd("Cannot upload: no active channel", 2*time.Second)
 	}
 
 	c.SetUploading(true)
 	cmds := []tea.Cmd{
-		a.uploader(channelID, threadTS, caption, attachments),
+		teaCmd(a.files.Upload(channelID, threadTS, caption, attachments)),
 		a.uploadToastCmd(fmt.Sprintf("Uploading 0/%d…", len(attachments)), 30*time.Second),
 	}
 	return tea.Batch(cmds...)
@@ -3472,7 +3405,7 @@ func (a *App) smartPaste() tea.Cmd {
 		target = &a.threadCompose
 	}
 
-	textBytes := a.clipboardRead(clipboard.FmtText)
+	textBytes := a.desktop.ReadClipboard(core.ClipboardText)
 	if consumed, cmd := a.tryAttachFromClipboard(target, string(textBytes)); consumed {
 		return cmd
 	}
@@ -3496,7 +3429,7 @@ func (a *App) smartPaste() tea.Cmd {
 // bracketed-paste this is the PasteMsg's payload.
 func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string) (bool, tea.Cmd) {
 	// 1. Image bytes from the OS clipboard.
-	if imgBytes := a.clipboardRead(clipboard.FmtImage); len(imgBytes) > 0 {
+	if imgBytes := a.desktop.ReadClipboard(core.ClipboardImage); len(imgBytes) > 0 {
 		if int64(len(imgBytes)) > maxAttachmentSize {
 			return true, a.uploadToastCmd(
 				fmt.Sprintf("Image too large (%s > 10 MB limit)", humanSize(int64(len(imgBytes)))),
@@ -3518,7 +3451,7 @@ func (a *App) tryAttachFromClipboard(target *compose.Model, pathCandidate string
 
 	// 2. File-path text.
 	if path, ok := resolveFilePath(pathCandidate); ok {
-		info, err := os.Stat(path)
+		info, err := a.desktop.Stat(path)
 		if err == nil && info.Mode().IsRegular() {
 			if info.Size() > maxAttachmentSize {
 				return true, a.uploadToastCmd("File too large (>10 MB limit)", 3*time.Second)
@@ -3596,9 +3529,7 @@ func (a *App) notifyReadStateChanged() {
 	other := a.workspaceRail.OtherUnreadCount(a.activeTeamID)
 	name := a.workspaceRail.NameByID(a.activeTeamID)
 	a.windowTitle = computeWindowTitle(a.activeTeamID, name, active, other)
-	if a.statusReport != nil {
-		a.statusReport(active, other, name, a.windowTitle)
-	}
+	a.desktop.ReportStatus(active, other, name, a.windowTitle)
 }
 
 // applyChannelMark updates local state for a channel-level read-state
@@ -3702,6 +3633,20 @@ func (a *App) applyThreadMarkListState(channelID, threadTS, lastRead string) {
 	if a.threadsView.MarkByThreadTSReadAt(channelID, threadTS, lastRead) {
 		a.sidebar.SetThreadsUnreadCount(a.threadsView.UnreadCount())
 	}
+	// The cursor is already in thread_subscriptions -- markThreadRead
+	// writes it before ThreadMarkedLocalMsg, OnThreadMarked before
+	// ThreadMarkedRemoteMsg -- and the rail's thread half reads that
+	// table (railThreadsUnread in cmd/slk), so recompute the rail here,
+	// whether or not the list had a row to settle: after a workspace
+	// switch the list is empty but the cursor still moved.
+	//
+	// This is the one thread mark site that fans out. The optimistic
+	// ones -- MarkSelectedRead on open, the ThreadRepliesLoadedMsg
+	// recompute, applyThreadMarkUnread -- change nothing in the DB at
+	// that moment, so the rail would only re-read the answer it already
+	// shows; the mark they issue, or its thread_marked echo, lands here
+	// and refreshes it then.
+	a.notifyReadStateChanged()
 }
 
 // applyThreadMarkEcho handles an inbound thread_marked WS event.

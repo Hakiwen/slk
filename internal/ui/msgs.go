@@ -17,10 +17,13 @@ import (
 	"image"
 	"time"
 
-	"github.com/gammons/slk/internal/cache"
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/gammons/slk/internal/core"
 	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/channelfinder"
 	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/ui/peerstatus"
 	"github.com/gammons/slk/internal/ui/searchresults"
 	"github.com/gammons/slk/internal/ui/sidebar"
 )
@@ -178,7 +181,7 @@ type (
 	// match the active team.
 	ThreadsListLoadedMsg struct {
 		TeamID    string
-		Summaries []cache.ThreadSummary
+		Summaries []core.ThreadSummary
 		// SubscriptionsAvailable reflects whether the most recent
 		// subscription sync succeeded in fetching the authoritative
 		// thread-subscription list. The threads view renders a banner
@@ -266,6 +269,10 @@ type (
 		Channels     []sidebar.ChannelItem
 		FinderItems  []channelfinder.Item
 		UserNames    map[string]string
+		// UserStatuses is every cached user's custom status, for author
+		// names and DM rows. DND is not cached; RefreshPeerDND fetches it
+		// and delivers it as UserDNDChangeMsg.
+		UserStatuses map[string]peerstatus.Status
 		// ExternalUsers maps userID -> true for users this workspace
 		// considers Slack Connect / shared-channel guests. Hydrated from
 		// cache.User.IsExternal so the mention picker can flag externals
@@ -280,6 +287,10 @@ type (
 		// workspace. Nil means "use config-glob behavior" (the App's
 		// sidebar reverts to its existing name-keyed buckets).
 		SectionsProvider sidebar.SectionsProvider
+		// RefreshPeerDND, if set, is appended to reduceWorkspaceSwitched's
+		// batch after the switch applies. It fetches DM peers' DND for
+		// this workspace and delivers results as UserDNDChangeMsg.
+		RefreshPeerDND tea.Cmd
 	}
 	// ReadStateChangedMsg is sent whenever the persistent read state changes,
 	// so panels that read from cache.GetWorkspaceReadState re-render.
@@ -293,11 +304,12 @@ type (
 	// im_created, group_joined, or channel_joined event. The TeamID
 	// disambiguates events for inactive workspaces; only events whose
 	// TeamID matches the currently-active workspace mutate the live
-	// sidebar — others are persisted in the workspace's WorkspaceContext
-	// for when the user switches in.
+	// sidebar and channel finder — others are persisted in the
+	// workspace's WorkspaceContext for when the user switches in.
 	ConversationOpenedMsg struct {
-		TeamID string
-		Item   sidebar.ChannelItem
+		TeamID     string
+		Item       sidebar.ChannelItem
+		FinderItem channelfinder.Item
 	}
 	// SectionsRefreshedMsg is sent when a workspace's Slack-native
 	// section state has mutated (via channel_section_* WS events) and
@@ -331,6 +343,9 @@ type (
 		Channels     []sidebar.ChannelItem
 		FinderItems  []channelfinder.Item
 		UserNames    map[string]string
+		// UserStatuses is every cached user's custom status, for author
+		// names. DM peers' DND arrives separately after connect.
+		UserStatuses map[string]peerstatus.Status
 		// ExternalUsers maps userID -> true for users this workspace
 		// considers Slack Connect / shared-channel guests. Hydrated from
 		// cache.User.IsExternal so the mention picker can flag externals
@@ -408,6 +423,29 @@ type (
 	PresenceChangeMsg struct {
 		UserID   string
 		Presence string
+	}
+	// UserStatusChangeMsg carries a user's custom status for one
+	// workspace. Expires is the zero time for a status that never
+	// expires; renderers hide a status whose Expires has passed.
+	UserStatusChangeMsg struct {
+		TeamID  string
+		UserID  string
+		Emoji   string
+		Text    string
+		Expires time.Time
+		// Huddle is Slack's huddle_state; HuddleExpires its expiry, zero
+		// when unset. See peerstatus.Status.InHuddle.
+		Huddle        string
+		HuddleExpires time.Time
+	}
+	// UserDNDChangeMsg carries another user's DND state for one
+	// workspace. EndTS is the zero time when DND is off or its end is
+	// unknown.
+	UserDNDChangeMsg struct {
+		TeamID  string
+		UserID  string
+		Enabled bool
+		EndTS   time.Time
 	}
 	// StatusChangeMsg is sent when the authenticated user's own presence
 	// or DND state changes for any workspace. The App routes it to the

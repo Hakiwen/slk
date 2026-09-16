@@ -129,14 +129,14 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.SidebarGrow):
 		a.sidebar.GrowWidth()
-		if a.widthSaveFn != nil {
-			a.widthSaveFn(a.sidebar.Width())
+		if a.settings != nil {
+			a.settings.SaveSidebarWidth(a.sidebar.Width())
 		}
 
 	case key.Matches(msg, a.keys.SidebarShrink):
 		a.sidebar.ShrinkWidth()
-		if a.widthSaveFn != nil {
-			a.widthSaveFn(a.sidebar.Width())
+		if a.settings != nil {
+			a.settings.SaveSidebarWidth(a.sidebar.Width())
 		}
 
 	case key.Matches(msg, a.keys.ToggleThread):
@@ -306,12 +306,12 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		keyStr := msg.String()
 		if len(keyStr) == 1 && keyStr[0] >= '1' && keyStr[0] <= '9' {
 			idx := int(keyStr[0] - '1') // 0-indexed
-			if idx < len(a.workspaceItems) && a.workspaceSwitcher != nil {
+			if idx < len(a.workspaceItems) && a.workspaceSvc != nil {
 				if a.workspaceItems[idx].ID != a.workspaceRail.SelectedID() {
-					switcher := a.workspaceSwitcher
+					switcher := a.workspaceSvc
 					teamID := a.workspaceItems[idx].ID
 					return func() tea.Msg {
-						return switcher(teamID)
+						return switcher.Switch(teamID)
 					}
 				}
 			}

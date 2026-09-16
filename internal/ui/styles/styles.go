@@ -6,7 +6,7 @@ import (
 	"image/color"
 
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/core"
 )
 
 var (
@@ -273,7 +273,7 @@ func Version() int64 { return version }
 
 // Apply sets the color palette from a named theme with optional overrides,
 // then rebuilds all composed styles.
-func Apply(themeName string, overrides config.Theme) {
+func Apply(themeName string, overrides core.Theme) {
 	version++
 	colors := lookupTheme(themeName)
 

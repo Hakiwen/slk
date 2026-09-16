@@ -121,6 +121,24 @@ type EventHandler interface {
 
 	// OnMemberLeft is delivered for member_left_channel WS events.
 	OnMemberLeft(channelID, userID string)
+
+	// OnUserStatusChange is delivered for user_change and
+	// user_status_changed, which carry a full user record. Measured on
+	// a real workspace, the socket sends these only for the
+	// authenticated user; other users' changes arrive as
+	// OnUserInvalidated.
+	OnUserStatusChange(userID string, st UserStatus)
+	// OnUserInvalidated is delivered for user_invalidated, whose whole
+	// payload is a user ID: that user's profile changed, and the
+	// receiver must refetch it to learn how.
+	OnUserInvalidated(userID string)
+	// OnDNDInvalidated is delivered for dnd_invalidated, the ID-only
+	// counterpart of OnUserInvalidated for a user's DND state.
+	OnDNDInvalidated(userID string)
+	// OnUserDNDChange is delivered for a dnd_updated_user event naming
+	// a user. Never observed on the socket; handled so that another
+	// user's DND can never be mistaken for the authenticated user's.
+	OnUserDNDChange(userID string, enabled bool, endUnix int64)
 }
 
 // wsEvent is the minimal structure for identifying a WebSocket event type.
@@ -217,9 +235,45 @@ type wsDNDStatusInner struct {
 }
 
 // wsDNDUpdatedEvent represents a dnd_updated or dnd_updated_user event.
+// User is set only on dnd_updated_user, which is about another user.
 type wsDNDUpdatedEvent struct {
 	Type      string           `json:"type"`
+	User      string           `json:"user"`
 	DNDStatus wsDNDStatusInner `json:"dnd_status"`
+}
+
+// wsUserChangeEvent represents user_change and user_status_changed.
+// The payload is a full user record; only the status fields slk
+// renders are modelled.
+type wsUserChangeEvent struct {
+	Type string `json:"type"`
+	User struct {
+		ID      string     `json:"id"`
+		Profile UserStatus `json:"profile"`
+	} `json:"user"`
+}
+
+// UserStatus is the part of a user's profile that renders next to their
+// name. Its JSON tags are the profile keys, so a user_change profile
+// decodes straight into it.
+type UserStatus struct {
+	Emoji      string `json:"status_emoji"`
+	Text       string `json:"status_text"`
+	Expiration int64  `json:"status_expiration"`
+	// HuddleState is "in_a_huddle" while the user is in a huddle and
+	// "default_unset" otherwise.
+	HuddleState      string `json:"huddle_state"`
+	HuddleExpiration int64  `json:"huddle_state_expiration_ts"`
+}
+
+// wsUserInvalidatedEvent represents user_invalidated and
+// dnd_invalidated. Measured on a real workspace, the whole payload is
+// {type, event_ts, user:{id}}.
+type wsUserInvalidatedEvent struct {
+	Type string `json:"type"`
+	User struct {
+		ID string `json:"id"`
+	} `json:"user"`
 }
 
 // wsChannelMarkedEvent represents a channel_marked / im_marked /
@@ -387,13 +441,44 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		}
 		handler.OnSelfPresenceChange(evt.Presence)
 
-	case "dnd_updated", "dnd_updated_user":
+	case "dnd_updated":
 		var evt wsDNDUpdatedEvent
 		if err := json.Unmarshal(data, &evt); err != nil {
 			return
 		}
 		isDND, end := computeDNDState(evt.DNDStatus, time.Now().Unix())
 		handler.OnDNDChange(isDND, end)
+
+	case "dnd_updated_user":
+		// About another user. Routing it into OnDNDChange would flip
+		// slk's own DND segment, so one naming no user is dropped.
+		var evt wsDNDUpdatedEvent
+		if err := json.Unmarshal(data, &evt); err != nil || evt.User == "" {
+			return
+		}
+		isDND, end := computeDNDState(evt.DNDStatus, time.Now().Unix())
+		debuglog.WS("dnd_updated_user: user=%s dnd=%v end=%d", evt.User, isDND, end)
+		handler.OnUserDNDChange(evt.User, isDND, end)
+
+	case "user_change", "user_status_changed":
+		var evt wsUserChangeEvent
+		if err := json.Unmarshal(data, &evt); err != nil || evt.User.ID == "" {
+			return
+		}
+		debuglog.WS("%s: user=%s huddle_state=%q", evt.Type, evt.User.ID, evt.User.Profile.HuddleState)
+		handler.OnUserStatusChange(evt.User.ID, evt.User.Profile)
+
+	case "user_invalidated", "dnd_invalidated":
+		var evt wsUserInvalidatedEvent
+		if err := json.Unmarshal(data, &evt); err != nil || evt.User.ID == "" {
+			return
+		}
+		debuglog.WS("%s: user=%s", evt.Type, evt.User.ID)
+		if evt.Type == "user_invalidated" {
+			handler.OnUserInvalidated(evt.User.ID)
+		} else {
+			handler.OnDNDInvalidated(evt.User.ID)
+		}
 
 	case "channel_marked", "im_marked", "group_marked", "mpim_marked":
 		var evt wsChannelMarkedEvent
@@ -526,6 +611,18 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			debuglog.WS("unknown event type=%q raw=%s", evt.Type, string(payload))
 		}
 	}
+}
+
+// DNDStateFromStatus is computeDNDState for a dnd.info or dnd.teamInfo
+// result, which slack-go decodes into its own type.
+func DNDStateFromStatus(st slack.DNDStatus, now int64) (bool, int64) {
+	return computeDNDState(wsDNDStatusInner{
+		Enabled:        st.Enabled,
+		SnoozeEnabled:  st.SnoozeEnabled,
+		SnoozeEndTime:  int64(st.SnoozeEndTime),
+		NextDNDStartTS: int64(st.NextStartTimestamp),
+		NextDNDEndTS:   int64(st.NextEndTimestamp),
+	}, now)
 }
 
 // computeDNDState evaluates whether the user is currently in DND from

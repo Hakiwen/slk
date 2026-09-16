@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ids"
 	"github.com/gammons/slk/internal/ui/sidebar"
 )
@@ -62,8 +63,8 @@ type searchSvcRecorder struct {
 }
 
 func (r *searchSvcRecorder) install(a *App) {
-	a.SetSearchService(NewSearchService(SearchServiceFuncs{
-		SearchChannel: func(ch ids.ChannelID, q string) tea.Msg {
+	a.SetSearchService(core.NewSearchService(core.SearchServiceFuncs{
+		SearchChannel: func(ch ids.ChannelID, q string) core.Msg {
 			r.calls++
 			r.channel, r.query = ch, q
 			return r.reply
@@ -160,7 +161,7 @@ func TestSearchModeKeys(t *testing.T) {
 
 		// ---- Enter -------------------------------------------------
 		{
-			name: "enter dispatches the trimmed query to the SearchService and stamps the generation",
+			name: "enter dispatches the trimmed query to the core.SearchService and stamps the generation",
 			opts: searchOpts(),
 			setup: func(t *testing.T, a *App) {
 				typeSearch("  hello  ")(t, a)

@@ -1,5 +1,5 @@
 // Package threadsview is the UI model for the "Threads" panel: a vertical
-// list of threads the user is involved in, sourced from cache.ThreadSummary.
+// list of threads the user is involved in, sourced from core.ThreadSummary.
 //
 // The model is purely presentation: callers (typically the App layer) push
 // new summaries via SetSummaries whenever the cache produces a fresh ranking,
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/usergroups"
@@ -83,7 +83,7 @@ func borderFillStyle() lipgloss.Style {
 
 // Model holds the threads-list state.
 type Model struct {
-	summaries    []cache.ThreadSummary
+	summaries    []core.ThreadSummary
 	userNames    map[string]string
 	channelNames map[string]string
 	userGroups   map[string]string
@@ -230,7 +230,7 @@ func (m *Model) SetSubscriptionsAvailable(available bool) {
 	m.dirty()
 }
 
-func (m *Model) SetSummaries(s []cache.ThreadSummary) {
+func (m *Model) SetSummaries(s []core.ThreadSummary) {
 	prevCh, prevTS, hadSel := m.selectedKey()
 	m.summaries = s
 
@@ -250,7 +250,7 @@ func (m *Model) SetSummaries(s []cache.ThreadSummary) {
 }
 
 // Summaries returns the current list of thread summaries.
-func (m *Model) Summaries() []cache.ThreadSummary { return m.summaries }
+func (m *Model) Summaries() []core.ThreadSummary { return m.summaries }
 
 // SelectedIndex returns the selection cursor's position, or 0 when the list
 // is empty.
@@ -267,9 +267,9 @@ func (m *Model) Selected() (channelID, threadTS string, ok bool) {
 }
 
 // SelectedSummary returns the currently selected ThreadSummary.
-func (m *Model) SelectedSummary() (cache.ThreadSummary, bool) {
+func (m *Model) SelectedSummary() (core.ThreadSummary, bool) {
 	if len(m.summaries) == 0 || m.selected < 0 || m.selected >= len(m.summaries) {
-		return cache.ThreadSummary{}, false
+		return core.ThreadSummary{}, false
 	}
 	return m.summaries[m.selected], true
 }
@@ -641,7 +641,7 @@ func blankLine(width int) string {
 // mechanism used for messages and thread replies. Non-selected rows
 // reserve the same 1-column gutter with a background-colored (invisible)
 // border so column alignment is uniform.
-func (m *Model) renderCard(s cache.ThreadSummary, width int, selected bool) []string {
+func (m *Model) renderCard(s core.ThreadSummary, width int, selected bool) []string {
 	// The left border occupies 1 column; content fills the remainder.
 	contentWidth := width - 1
 	if contentWidth < 1 {

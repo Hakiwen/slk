@@ -18,13 +18,13 @@ type statusCall struct {
 
 // snoozeSetup returns a setup that types digits into the snooze buffer
 // through the handler itself (so the buffer is reached the way
-// production reaches it) and records every setStatusFn call into calls.
+// production reaches it) and records every SetStatus call into calls.
 func snoozeSetup(digits string, calls *[]statusCall) func(*testing.T, *App) {
 	return snoozeSetupWith(digits, calls, true)
 }
 
 // snoozeSetupNoSetter is snoozeSetup with no status setter installed,
-// so the handler's `if a.setStatusFn != nil` guard
+// so the handler's `if a.presenceSvc != nil` guard
 // (mode_presence_snooze.go:41) is driven down its false branch. Every
 // other row in this table installs a setter, so without this one that
 // branch is never taken — and Go statement coverage would not say so,
@@ -40,7 +40,7 @@ func snoozeSetupWith(digits string, calls *[]statusCall, withSetter bool) func(*
 		// would see its predecessors' invocations.
 		*calls = nil
 		if withSetter {
-			a.SetStatusSetter(func(action presencemenu.Action, mins int) {
+			a.setStatusSetterForTest(func(action presencemenu.Action, mins int) {
 				*calls = append(*calls, statusCall{action: action, mins: mins})
 			})
 		}
@@ -156,8 +156,8 @@ func TestPresenceCustomSnoozeModeKeys(t *testing.T) {
 			key:      keyCode(tea.KeyEnter),
 			wantMode: ModeNormal,
 			assert: func(t *testing.T, a *App, cmd tea.Cmd) {
-				if a.setStatusFn != nil {
-					t.Fatal("precondition: setStatusFn should be nil; the guard is not being exercised")
+				if a.presenceSvc != nil {
+					t.Fatal("precondition: presenceSvc should be nil; the guard is not being exercised")
 				}
 				_, dnd, end, ok := a.presence.Status("T1")
 				if !ok || !dnd {
