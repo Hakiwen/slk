@@ -77,12 +77,13 @@ func (m *Model) SetChannelType(chType string) {
 }
 
 // channelGlyph returns the prefix glyph for the active channel type.
+// Non-# glyphs carry a trailing space; "#" sits flush against the name.
 func (m Model) channelGlyph() string {
 	switch m.channelType {
 	case "private":
-		return "\u25c6"
+		return "\u25c6 "
 	case "dm", "group_dm":
-		return "\u25cf"
+		return "\u25cf "
 	default:
 		return "#"
 	}
