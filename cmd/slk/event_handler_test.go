@@ -1,7 +1,12 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -343,6 +348,135 @@ func TestOnMessage_ThreadBroadcast_SetsHasUnread(t *testing.T) {
 	s, _ := db.GetChannelReadState("C1")
 	if !s.HasUnread {
 		t.Errorf("HasUnread = false, want true (thread_broadcast bumps channel)")
+	}
+}
+
+// conversations.info results in the shape a live Enterprise Grid
+// workspace returned (IDs and names replaced). The im carries no
+// is_member at all.
+const (
+	infoMPIM = `{"id":"G9","name":"mpdm-alice--bob--carol-1","is_channel":true,"is_group":false,"is_im":false,"is_mpim":true,"is_private":true,"is_archived":false,"is_shared":true,"is_org_shared":true,"is_member":true,"is_open":true,"last_read":"0000000000.000000","context_team_id":"E1","updated":1789571345593}`
+	infoIM   = `{"id":"D9","is_im":true,"user":"U2","is_archived":false,"is_shared":true,"is_org_shared":true,"is_open":true,"last_read":"1787068717.126069","unread_count":0,"context_team_id":"E1","updated":1787068717149}`
+)
+
+func decodeInfo(t *testing.T, raw string) *slack.Channel {
+	t.Helper()
+	var ch slack.Channel
+	if err := json.Unmarshal([]byte(raw), &ch); err != nil {
+		t.Fatal(err)
+	}
+	return &ch
+}
+
+type sendFunc func(tea.Msg)
+
+func (f sendFunc) Send(msg tea.Msg) { f(msg) }
+
+// A group DM another user created mid-session: its messages arrived and
+// were cached, but it never got a sidebar row.
+func TestOnMessage_UnknownConversation_AddsItUnread(t *testing.T) {
+	db := newTestDB(t)
+	wctx := &WorkspaceContext{
+		BotUserIDs:        map[string]bool{},
+		UserNames:         map[string]string{},
+		UserNamesByHandle: map[string]string{},
+	}
+	var sent []string
+	lookups := 0
+	h := &rtmEventHandler{
+		// The sidebar reads read state from the DB as soon as the row
+		// arrives, and hides a never-opened group DM that is not unread.
+		program: sendFunc(func(msg tea.Msg) {
+			switch msg.(type) {
+			case ui.ConversationOpenedMsg:
+				s, _ := db.GetChannelReadState("G9")
+				sent = append(sent, fmt.Sprintf("opened unread=%v", s.HasUnread))
+			case ui.NewMessageMsg:
+				sent = append(sent, "message")
+			}
+		}),
+		db:              db,
+		wsCtx:           wctx,
+		workspaceID:     "T1",
+		currentUserID:   "USELF",
+		isActive:        func() bool { return true },
+		activeChannelID: func() string { return "C1" },
+		channelNames:    map[string]string{},
+		channelTypes:    map[string]string{},
+		resolveConversation: func(context.Context, string) (*slack.Channel, error) {
+			lookups++
+			return decodeInfo(t, infoMPIM), nil
+		},
+	}
+
+	h.OnMessage("G9", "U2", "1.001", "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
+	h.OnMessage("G9", "U2", "1.002", "again", "", "", false, nil, slack.Blocks{}, nil, "", "")
+
+	if lookups != 1 {
+		t.Errorf("lookups = %d, want 1", lookups)
+	}
+	if len(wctx.Channels) != 1 || wctx.Channels[0].ID != "G9" || wctx.Channels[0].Type != "group_dm" {
+		t.Fatalf("Channels = %+v, want the group DM G9", wctx.Channels)
+	}
+	if want := []string{"opened unread=true", "message", "message"}; !slices.Equal(sent, want) {
+		t.Errorf("sent = %q, want %q", sent, want)
+	}
+}
+
+// A refusal or rate limit waits instead of costing a request per
+// message; a network error retries on the very next message, which in a
+// short burst may be the only one left.
+func TestOnMessage_UnknownConversation_RetryDependsOnFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		err      error
+		backsOff bool
+	}{
+		{"timeout", context.DeadlineExceeded, false},
+		{"refused", fmt.Errorf("getting conversation D9: %w", slack.SlackErrorResponse{Err: "enterprise_is_restricted"}), true},
+		{"rate limited", fmt.Errorf("getting conversation D9: %w", &slack.RateLimitedError{RetryAfter: 30 * time.Second}), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wctx := &WorkspaceContext{
+				BotUserIDs:        map[string]bool{},
+				UserNames:         map[string]string{},
+				UserNamesByHandle: map[string]string{},
+			}
+			lookups := 0
+			h := &rtmEventHandler{
+				wsCtx:        wctx,
+				workspaceID:  "T1",
+				channelNames: map[string]string{},
+				channelTypes: map[string]string{},
+				resolveConversation: func(context.Context, string) (*slack.Channel, error) {
+					lookups++
+					if lookups == 1 {
+						return nil, tc.err
+					}
+					return decodeInfo(t, infoIM), nil
+				},
+			}
+			msg := func(ts string) {
+				h.OnMessage("D9", "U2", ts, "hi", "", "", false, nil, slack.Blocks{}, nil, "", "")
+			}
+
+			msg("1.001")
+			msg("1.002")
+			if !tc.backsOff {
+				if lookups != 2 || len(wctx.Channels) != 1 {
+					t.Errorf("lookups = %d, Channels = %d; want 2 and the DM", lookups, len(wctx.Channels))
+				}
+				return
+			}
+			if lookups != 1 || len(wctx.Channels) != 0 {
+				t.Fatalf("within the wait: lookups = %d, Channels = %d; want 1 and none", lookups, len(wctx.Channels))
+			}
+			h.lookupRetryAt["D9"] = time.Now().Add(-time.Second)
+			msg("1.003")
+			if lookups != 2 || len(wctx.Channels) != 1 || wctx.Channels[0].Type != "dm" {
+				t.Errorf("after the wait: lookups = %d, Channels = %+v; want 2 and the DM D9", lookups, wctx.Channels)
+			}
+		})
 	}
 }
 

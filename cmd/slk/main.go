@@ -2258,6 +2258,7 @@ func run() error {
 				ensureThreadSubs: func() {
 					ensureWorkspaceThreadSubs(context.Background(), wctx, db, p.Send)
 				},
+				resolveConversation: wctx.Client.GetConversationInfo,
 			}
 			wctx.RTMHandler = handler
 			wctx.ConnMgr = slackclient.NewConnectionManager(wctx.Client, handler)
@@ -4264,6 +4265,64 @@ type rtmEventHandler struct {
 	//
 	// nil in tests that construct a handler for unrelated events.
 	ensureThreadSubs func()
+
+	// resolveConversation is conversations.info, for discoverConversation.
+	// nil in tests that construct a handler for unrelated events.
+	resolveConversation func(ctx context.Context, channelID string) (*slack.Channel, error)
+	// lookupRetryAt holds when a refused or rate-limited discovery
+	// lookup may run again. WebSocket goroutine only.
+	lookupRetryAt map[string]time.Time
+}
+
+const discoveryRetryAfter = time.Minute
+
+// discoverConversation adds a conversation the first time a message
+// arrives on one slk does not know, and reports whether it did. The
+// conversation-opened events are not enough: a group DM another user
+// created mid-session delivered its messages here without ever getting
+// a sidebar row. The message is the signal proven to arrive.
+//
+// A delivered message is treated as membership, so there is no
+// is_member check (conversations.info has none for ims anyway).
+func (h *rtmEventHandler) discoverConversation(channelID string) (sidebar.ChannelItem, bool) {
+	if h.resolveConversation == nil {
+		return sidebar.ChannelItem{}, false
+	}
+	if _, known := h.channelTypes[channelID]; known {
+		return sidebar.ChannelItem{}, false
+	}
+	if time.Now().Before(h.lookupRetryAt[channelID]) {
+		return sidebar.ChannelItem{}, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ch, err := h.resolveConversation(ctx, channelID)
+	if err != nil {
+		log.Printf("workspace %s: looking up the conversation of an incoming message: %v", h.workspaceID, err)
+		// A refusal or a rate limit will not clear by the next message,
+		// and retrying each one would cost a blocking request per message
+		// on a busy channel. A network error or timeout may clear, and a
+		// quick burst of messages can be the only retry it gets.
+		var rateLimited *slack.RateLimitedError
+		var refused slack.SlackErrorResponse
+		var wait time.Duration
+		switch {
+		case errors.As(err, &rateLimited):
+			wait = rateLimited.RetryAfter
+		case errors.As(err, &refused):
+			wait = discoveryRetryAfter
+		}
+		if wait > 0 {
+			if h.lookupRetryAt == nil {
+				h.lookupRetryAt = map[string]time.Time{}
+			}
+			h.lookupRetryAt[channelID] = time.Now().Add(wait)
+		}
+		return sidebar.ChannelItem{}, false
+	}
+	delete(h.lookupRetryAt, channelID)
+	debuglog.WS("discovered conversation from message: team=%s channel=%s mpim=%v im=%v", h.workspaceID, ch.ID, ch.IsMpIM, ch.IsIM)
+	return h.addConversation(*ch)
 }
 
 func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subtype string, edited bool, files []slack.File, blocks slack.Blocks, attachments []slack.Attachment, botID, username string) {
@@ -4277,6 +4336,9 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 			h.wsCtx.UserResolver.RequestBot(botID, username)
 		}
 	}
+	// Synchronous, so the channel's row and type exist before the writes
+	// below. The UI hears of it only after the unread write.
+	discovered, isNew := h.discoverConversation(channelID)
 	// Cache every message to SQLite, regardless of active workspace.
 	// Guard against nil db so handlers constructed in tests (without
 	// real persistence) don't panic.
@@ -4470,6 +4532,12 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 				log.Printf("Warning: failed to increment mention count for %s: %v", channelID, err)
 			}
 		}
+	}
+
+	if isNew {
+		// The sidebar's staleness filter reads read state when the row
+		// arrives, and hides a never-opened DM that is not yet unread.
+		h.publishConversation(discovered)
 	}
 
 	if h.isActive != nil && !h.isActive() {
@@ -4981,8 +5049,15 @@ func (h *rtmEventHandler) OnThreadSubscriptionChanged(channelID, threadTS, lastR
 // workspace is active — forwards a ConversationOpenedMsg to the UI
 // so the live sidebar and channel finder (Ctrl+P) both update.
 func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
+	if item, ok := h.addConversation(ch); ok {
+		h.publishConversation(item)
+	}
+}
+
+// addConversation is OnConversationOpened without the UI message.
+func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem, bool) {
 	if h.wsCtx == nil {
-		return
+		return sidebar.ChannelItem{}, false
 	}
 
 	item, finderItem := buildChannelItem(ch, h.wsCtx, h.cfg, h.workspaceID)
@@ -5026,12 +5101,15 @@ func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
 	if h.channelTypes != nil {
 		h.channelTypes[ch.ID] = item.Type
 	}
+	return item, true
+}
 
+func (h *rtmEventHandler) publishConversation(item sidebar.ChannelItem) {
 	if h.program == nil {
 		return
 	}
 	if h.isActive != nil && !h.isActive() {
-		// Persistence above already updated wctx.Channels; defer the
+		// addConversation already updated wctx.Channels; defer the
 		// UI message until the user switches into this workspace.
 		return
 	}

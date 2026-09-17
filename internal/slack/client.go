@@ -57,6 +57,7 @@ type SlackAPI interface {
 	GetDNDTeamInfoContext(ctx context.Context, users []string, options ...slack.ParamOption) (map[string]slack.DNDStatus, error)
 	UploadFileContext(ctx context.Context, params slack.UploadFileParameters) (*slack.FileSummary, error)
 	OpenConversationContext(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error)
+	GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error)
 }
 
 // defaultAPIBaseURL is the canonical Slack Web API root used as a fallback
@@ -545,6 +546,15 @@ func (c *Client) GetChannels(ctx context.Context) ([]slack.Channel, error) {
 	}
 
 	return allChannels, nil
+}
+
+// GetConversationInfo fetches one conversation (conversations.info).
+func (c *Client) GetConversationInfo(ctx context.Context, channelID string) (*slack.Channel, error) {
+	ch, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: channelID})
+	if err != nil {
+		return nil, fmt.Errorf("getting conversation %s: %w", channelID, err)
+	}
+	return ch, nil
 }
 
 // GetUsersInConversation returns all user IDs that are members of the
