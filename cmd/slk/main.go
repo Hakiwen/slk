@@ -4284,15 +4284,15 @@ const discoveryRetryAfter = time.Minute
 //
 // A delivered message is treated as membership, so there is no
 // is_member check (conversations.info has none for ims anyway).
-func (h *rtmEventHandler) discoverConversation(channelID string) (sidebar.ChannelItem, bool) {
+func (h *rtmEventHandler) discoverConversation(channelID string) (sidebar.ChannelItem, channelfinder.Item, bool) {
 	if h.resolveConversation == nil {
-		return sidebar.ChannelItem{}, false
+		return sidebar.ChannelItem{}, channelfinder.Item{}, false
 	}
 	if _, known := h.channelTypes[channelID]; known {
-		return sidebar.ChannelItem{}, false
+		return sidebar.ChannelItem{}, channelfinder.Item{}, false
 	}
 	if time.Now().Before(h.lookupRetryAt[channelID]) {
-		return sidebar.ChannelItem{}, false
+		return sidebar.ChannelItem{}, channelfinder.Item{}, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -4318,7 +4318,7 @@ func (h *rtmEventHandler) discoverConversation(channelID string) (sidebar.Channe
 			}
 			h.lookupRetryAt[channelID] = time.Now().Add(wait)
 		}
-		return sidebar.ChannelItem{}, false
+		return sidebar.ChannelItem{}, channelfinder.Item{}, false
 	}
 	delete(h.lookupRetryAt, channelID)
 	debuglog.WS("discovered conversation from message: team=%s channel=%s mpim=%v im=%v", h.workspaceID, ch.ID, ch.IsMpIM, ch.IsIM)
@@ -4338,7 +4338,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	}
 	// Synchronous, so the channel's row and type exist before the writes
 	// below. The UI hears of it only after the unread write.
-	discovered, isNew := h.discoverConversation(channelID)
+	discovered, discoveredFinder, isNew := h.discoverConversation(channelID)
 	// Cache every message to SQLite, regardless of active workspace.
 	// Guard against nil db so handlers constructed in tests (without
 	// real persistence) don't panic.
@@ -4537,7 +4537,7 @@ func (h *rtmEventHandler) OnMessage(channelID, userID, ts, text, threadTS, subty
 	if isNew {
 		// The sidebar's staleness filter reads read state when the row
 		// arrives, and hides a never-opened DM that is not yet unread.
-		h.publishConversation(discovered)
+		h.publishConversation(discovered, discoveredFinder)
 	}
 
 	if h.isActive != nil && !h.isActive() {
@@ -5049,15 +5049,15 @@ func (h *rtmEventHandler) OnThreadSubscriptionChanged(channelID, threadTS, lastR
 // workspace is active — forwards a ConversationOpenedMsg to the UI
 // so the live sidebar and channel finder (Ctrl+P) both update.
 func (h *rtmEventHandler) OnConversationOpened(ch slack.Channel) {
-	if item, ok := h.addConversation(ch); ok {
-		h.publishConversation(item)
+	if item, finderItem, ok := h.addConversation(ch); ok {
+		h.publishConversation(item, finderItem)
 	}
 }
 
 // addConversation is OnConversationOpened without the UI message.
-func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem, bool) {
+func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem, channelfinder.Item, bool) {
 	if h.wsCtx == nil {
-		return sidebar.ChannelItem{}, false
+		return sidebar.ChannelItem{}, channelfinder.Item{}, false
 	}
 
 	item, finderItem := buildChannelItem(ch, h.wsCtx, h.cfg, h.workspaceID)
@@ -5101,10 +5101,10 @@ func (h *rtmEventHandler) addConversation(ch slack.Channel) (sidebar.ChannelItem
 	if h.channelTypes != nil {
 		h.channelTypes[ch.ID] = item.Type
 	}
-	return item, true
+	return item, finderItem, true
 }
 
-func (h *rtmEventHandler) publishConversation(item sidebar.ChannelItem) {
+func (h *rtmEventHandler) publishConversation(item sidebar.ChannelItem, finderItem channelfinder.Item) {
 	if h.program == nil {
 		return
 	}
