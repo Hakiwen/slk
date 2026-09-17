@@ -307,6 +307,26 @@ func TestModel_SetSearchElidesLongText(t *testing.T) {
 	}
 }
 
+func TestChannelGlyphSpacing(t *testing.T) {
+	tests := []struct {
+		chType string
+		want   string
+	}{
+		{"channel", "#general"},
+		{"private", "◆ general"},
+		{"dm", "● general"},
+		{"group_dm", "● general"},
+	}
+	for _, tt := range tests {
+		m := New()
+		m.SetChannel("general")
+		m.SetChannelType(tt.chType)
+		if out := stripANSI(m.View(80)); !strings.Contains(out, tt.want) {
+			t.Errorf("channelType %q: want %q in %q", tt.chType, tt.want, out)
+		}
+	}
+}
+
 // stripANSI removes ANSI escape sequences for substring assertions.
 func stripANSI(s string) string {
 	var b strings.Builder
