@@ -2344,30 +2344,10 @@ func TestGolden_WindowSplitRendersTwoDistinctPanes(t *testing.T) {
 }
 
 // goldenStatusOverflow is how many display columns wider than the
-// terminal every golden's rows come out.
-//
-// IT ENCODES A REAL, UNFIXED BUG, not a rendering convention -- tracked
-// as https://github.com/gammons/slk/issues/181. The status row overruns
-// its budget by six columns:
-//
-//   - statusbar.Model.render budgets the gap against width-1
-//     (statusbar/model.go:347-356), one column short to begin with;
-//   - it then emits the filler as up to three separate
-//     styles.StatusBar.Render calls (leftPad, hint, rightPad — or the
-//     single %*s filler), and styles.StatusBar carries Padding(0, 1)
-//     (styles/styles.go:467), so each Render adds two columns of
-//     padding that the budget never accounted for;
-//   - plus the 3-column rightPad gutter joined on at model.go:355.
-//
-// Nothing clips the result, so App.View() hands back a frame six cells
-// wider than a.width and the terminal wraps it. The goldens record that
-// faithfully, which is the point of a golden.
-//
-// WHEN THAT BUG IS FIXED: change this constant to 0 and re-bless. Do
-// not chase the new number — a correct statusbar renders at exactly
-// a.width, which is what `want = sc.w` already means for the overlay
-// case below.
-const goldenStatusOverflow = 6
+// terminal every golden's rows come out. Zero since the statusbar
+// overrun (#181) was fixed; kept so a regression reads as a one-line
+// change here rather than eight re-blessed goldens.
+const goldenStatusOverflow = 0
 
 // goldenMaxWidthReports caps how many wrong-width lines
 // TestGoldenFilesAreWellFormed dumps per scenario. See the loop at the
@@ -2395,16 +2375,9 @@ const goldenMaxWidthReports = 3
 //
 // On the width predicate, two facts that are easy to get wrong:
 //
-//  1. The expected width is sc.w + goldenStatusOverflow, NOT sc.w — see
-//     that constant. But a uniform w+6 is WRONG for overlay scenarios:
-//     maybeWrapFinalScreen (view_overlays.go:108-111) re-wraps the
-//     whole screen in a Width(a.width) style when an overlay is
-//     active, which truncates the overrun away. overlay_finder is
-//     therefore exactly 120 while the other seven are w+6. The
-//     exception is keyed on a.overlayActive() — derived from the built
-//     App — and deliberately NOT on the scenario's name, so a new
-//     overlay scenario is handled without an edit here and a scenario
-//     that stops opening its overlay fails rather than being excused.
+//  1. The expected width is sc.w + goldenStatusOverflow — see that
+//     constant. Every scenario is uniform now that the overrun is
+//     fixed, overlay or not.
 //
 //  2. Goldens carry NO trailing newline (compareGolden writes
 //     View().Content verbatim), so strings.Split on "\n" yields
@@ -2442,11 +2415,7 @@ func TestGoldenFilesAreWellFormed(t *testing.T) {
 					"from an empty frame", path)
 			}
 
-			want := sc.w + goldenStatusOverflow // see goldenStatusOverflow: a real bug
-			if a := sc.build(t); a.overlayActive() {
-				// maybeWrapFinalScreen clamped the frame to a.width.
-				want = sc.w
-			}
+			want := sc.w + goldenStatusOverflow
 			// Report at most goldenMaxWidthReports mismatching lines.
 			// Every failure mode here is systemic — a truncated file,
 			// a scenario whose declared width drifted, an overlay
@@ -2467,8 +2436,7 @@ func TestGoldenFilesAreWellFormed(t *testing.T) {
 					continue
 				}
 				t.Errorf("%s line %d is %d display columns wide, want %d "+
-					"(scenario width %d + %d statusbar overrun, or exactly the width "+
-					"when an overlay clamps it); line was:\n  %q",
+					"(scenario width %d + %d statusbar overrun); line was:\n  %q",
 					path, i+1, got, want, sc.w, goldenStatusOverflow, line)
 			}
 			if bad > goldenMaxWidthReports {
