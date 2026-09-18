@@ -243,13 +243,13 @@ func (m *Manager) ApplyJoin(channelID, userID string) {
 	if err := m.db.UpsertChannelMember(m.workspaceID, channelID, userID, now); err != nil {
 		return
 	}
+	// Load first: otherwise a join landing while EnsureFresh loads this
+	// channel is missing from the set it installs.
+	m.loadIntoMemory(channelID)
 	m.mu.Lock()
-	set := m.members[channelID]
-	if set == nil {
-		set = map[string]struct{}{}
-		m.members[channelID] = set
+	if set, known := m.members[channelID]; known {
+		set[userID] = struct{}{}
 	}
-	set[userID] = struct{}{}
 	m.mu.Unlock()
 
 	if m.resolver != nil {

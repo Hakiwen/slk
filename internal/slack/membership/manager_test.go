@@ -571,3 +571,30 @@ func TestEnsureFreshNeverFetchedPushesNothing(t *testing.T) {
 		t.Errorf("never-fetched channel pushed %+v; want no push", pushes)
 	}
 }
+
+// TestApplyJoinOnNeverFetchedChannelPushesNothing: a join must not turn
+// an unknown member list into one holding only the joiner.
+func TestApplyJoinOnNeverFetchedChannelPushesNothing(t *testing.T) {
+	mgr, _, sink, db := newManagerForTest(t)
+	defer db.Close()
+
+	mgr.ApplyJoin("C1", "U_NEW")
+
+	if pushes := sink.snapshot(); len(pushes) != 0 {
+		t.Errorf("join on a never-fetched channel pushed %+v; want no push", pushes)
+	}
+}
+
+// TestApplyJoinKeepsCachedMembersNotYetLoaded: a join on a channel that
+// is cached but not yet opened adds to the cached list.
+func TestApplyJoinKeepsCachedMembersNotYetLoaded(t *testing.T) {
+	mgr, _, sink, db := newManagerForTest(t)
+	defer db.Close()
+	_ = db.ReplaceChannelMembers("T1", "C1", []string{"U1", "U2"}, time.Now().Unix())
+
+	mgr.ApplyJoin("C1", "U3") // pushes on this goroutine
+
+	if pushes := sink.snapshot(); len(pushes) != 1 || len(pushes[0].memberIDs) != 3 {
+		t.Errorf("join pushed %+v; want one push of U1, U2 and U3", pushes)
+	}
+}
