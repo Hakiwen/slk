@@ -34,3 +34,8 @@ jobs:
           token: ${{ secrets.RENOVATE_TOKEN }}
         env:
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
+          # The action runs renovate against whatever repositories it is
+          # told about; without this it exits with "No repositories found"
+          # and does nothing. github.repository keeps it pointing at this
+          # repo (the job's if: guard already stops forks from running it).
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
