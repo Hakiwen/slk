@@ -133,7 +133,8 @@ func desktopErrorMessage(err error) string {
 	case errors.Is(err, slackdesktop.ErrNoSecretService):
 		return "No system keyring/secret service found. slk needs it to read the Slack session."
 	case errors.Is(err, slackdesktop.ErrSecretNotFound):
-		return "No Slack entry found in your keyring. Sign in to the Slack desktop app (and make sure it uses the system keyring), then retry."
+		return "No Slack entry found in your keyring or KWallet. Sign in to the Slack desktop app, then retry. " +
+			"If Slack was launched with --password-store=basic it never stored a key at all, and slk cannot read that session."
 	case errors.Is(err, slackdesktop.ErrDecryptFailed):
 		// Keep the wrapped detail: it names which step failed (padding, length,
 		// non-printable result), which is the difference between a diagnosable

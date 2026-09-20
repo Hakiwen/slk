@@ -10,6 +10,7 @@ require (
 	github.com/billgraziano/dpapi v0.5.0
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/gen2brain/beeep v0.11.2
+	github.com/godbus/dbus/v5 v5.1.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-sixel v0.0.9
 	github.com/muesli/reflow v0.3.0
@@ -45,7 +46,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/esiqveland/notify v0.13.3 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/golang/snappy v0.0.0-20180518054509-2e65f85255db // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackmordaunt/icns/v3 v3.0.1 // indirect
