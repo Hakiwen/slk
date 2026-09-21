@@ -1077,8 +1077,10 @@ func run() error {
 	// fetcher's auth mechanism via slackhttp.AuthResolver. The
 	// downloader gets its own resolver instance; it learns foreign-team
 	// (Slack Connect) auth independently of the image fetcher.
+	// Destination directory is configurable via [general].download_dir
+	// (default "~/Downloads", expanded by config.Load).
 	fileDownloader := filedl.New(slackhttp.NewAuthResolver(auths),
-		filepath.Join(os.TempDir(), "slk-files"))
+		cfg.General.DownloadDir)
 
 	// Migrate old avatar cache (one-time, idempotent).
 	oldAvatarDir := filepath.Join(cacheDir, "avatars")
