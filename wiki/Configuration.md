@@ -9,6 +9,8 @@ Config lives at `~/.config/slk/config.toml`.
 default_workspace = "work"      # the slug, not the team ID
 use_slack_sections = true       # use real Slack sidebar sections (default).
                                 # set false to use [sections.*] globs instead.
+download_dir = "~/Downloads"    # where file attachments (`d` keybinding) are
+                                # saved. "~" is expanded to your home directory.
 
 [appearance]
 theme = "dracula"

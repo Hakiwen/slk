@@ -74,6 +74,11 @@ type General struct {
 	// instead of the config-glob [sections.*] system. Pointer so we
 	// can distinguish "unset" (default true) from explicit false.
 	UseSlackSections *bool `toml:"use_slack_sections"`
+	// DownloadDir is where file attachments downloaded via the `d`
+	// keybinding are saved. Defaults to "~/Downloads". A leading "~"
+	// is expanded against the user's home directory at load time;
+	// other paths (absolute or relative) are used as-is.
+	DownloadDir string `toml:"download_dir"`
 }
 
 type Appearance struct {
@@ -189,6 +194,9 @@ type Theme = core.Theme
 
 func Default() Config {
 	return Config{
+		General: General{
+			DownloadDir: "~/Downloads",
+		},
 		Appearance: Appearance{
 			Theme:           "nord",
 			TimestampFormat: "3:04 PM",
@@ -262,7 +270,36 @@ func Load(path string) (Config, error) {
 		cfg.Appearance.EmojiImages = "on"
 	}
 
+	// Expand a leading "~" in download_dir against the real home
+	// directory. If the home directory can't be resolved (e.g. $HOME
+	// unset), fall back to the pre-configurable-directory default
+	// rather than writing downloads into a literal "~" folder.
+	if expanded, err := expandHome(cfg.General.DownloadDir); err == nil {
+		cfg.General.DownloadDir = expanded
+	} else {
+		cfg.General.DownloadDir = filepath.Join(os.TempDir(), "slk-files")
+	}
+
 	return cfg, nil
+}
+
+// expandHome expands a leading "~" in path to the user's home
+// directory (e.g. "~/Downloads" -> "/home/alice/Downloads"). Paths
+// not beginning with "~" or "~/" are returned unchanged. Returns an
+// error if path needs expansion but the home directory can't be
+// resolved.
+func expandHome(path string) (string, error) {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if path == "~" {
+		return home, nil
+	}
+	return filepath.Join(home, path[2:]), nil
 }
 
 // WorkspaceByTeamID returns the configured Workspace for the given
