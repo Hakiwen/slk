@@ -428,7 +428,7 @@ func channelType(ch edge.Channel) string {
 }
 
 // userDisplayName picks the name to show, mirroring the fallback chain
-// resolveUser already uses (main.go:2432): display name, then real
+// resolveUser already uses (in cmd/slk): display name, then real
 // name, then the handle.
 //
 // The fallback matters more here than there, because
@@ -446,7 +446,7 @@ func userDisplayName(u edge.User) string {
 
 // isExternal reports whether a user's home team differs from this
 // workspace's — a Slack Connect or shared-channel guest. Same test
-// resolveUser applies (main.go:2440), including the empty guard: a
+// resolveUser applies (in cmd/slk), including the empty guard: a
 // result with no team_id is unknown, not foreign.
 func isExternal(u edge.User, workspaceID string) bool {
 	return u.TeamID != "" && u.TeamID != workspaceID
