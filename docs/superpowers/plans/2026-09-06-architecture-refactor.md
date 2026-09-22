@@ -470,6 +470,22 @@ symbol → file → sha rebase table rather than deferring the hot regions.
 the sole overlap is two one-line comment corrections in `internal/ui`. Neither
 effort blocks the other and neither needs to land first.
 
+#### Achieved (2026-09-22, branch `refactor/phase1-main-go-splits`)
+
+`cmd/slk/main.go` went from 5,421 to 1,647 lines (3,655 lines moved into 16 new
+topical files plus one append to `thread_subscriptions.go`); it now holds
+exactly five package-scope declarations, enforced by
+`cmd/slk/main_scope_test.go`. The purity proof ran identical before and after:
+223 decls, 69 distinct imports, byte-for-byte. Eight comment-only corrections
+landed: seven across four external files (`internal/bootstrap/revalidate.go`
+×3, `internal/bootstrap/revalidate_test.go` ×2,
+`internal/ui/reducer_focus_test.go` ×1, `internal/ui/reducer_workspace.go`
+×1 — 7 insertions/7 deletions total) plus one inside `cmd/slk`
+(`bootstrap_adapters_test.go`, a stale `main.go` citation retired alongside
+the `connect.go` move) — plus one new test file (`main_scope_test.go`). `go
+build`, `go vet`, `gofmt -l .` and `go test ./... -race` (57 packages, zero
+failures) are all clean.
+
 ---
 
 ### Phase 2 — `main.go` structural
@@ -678,7 +694,7 @@ dupl -t 75 -plumbing $(find . -name '*.go' \
 | Phase | Scope | Prereqs | Spec | Plan | Status |
 |---|---|---|---|---|---|
 | 0 | Test safety net | — | [spec](../specs/2026-09-06-phase0-test-safety-net-design.md) | [plan](2026-09-06-phase0-test-safety-net.md) | **complete** |
-| 1 | `main.go` topical splits | — | [spec](../specs/2026-09-22-phase1-main-go-splits-design.md) | — | **spec approved** |
+| 1 | `main.go` topical splits | — | [spec](../specs/2026-09-22-phase1-main-go-splits-design.md) | [plan](2026-09-22-phase1-main-go-splits.md) | **complete** |
 | 2 | `main.go` structural | 1 | — | — | not started |
 | 3 | Collapse `messages`/`thread` fork | 0 | — | — | not started |
 | 4 | Modal chrome substrate | 0, 3 | — | — | not started |
