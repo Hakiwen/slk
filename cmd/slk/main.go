@@ -4052,30 +4052,6 @@ func formatTimestamp(ts, format string) string {
 	return t.Format(format)
 }
 
-func xdgConfig() string {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "slk")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "slk")
-}
-
-func xdgData() string {
-	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
-		return filepath.Join(dir, "slk")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "slk")
-}
-
-func xdgCache() string {
-	if dir := os.Getenv("XDG_CACHE_HOME"); dir != "" {
-		return filepath.Join(dir, "slk")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cache", "slk")
-}
-
 // bootstrapPresenceAndDND fetches the user's current presence and DND
 // state from Slack, populates the WorkspaceContext, and sends an initial
 // StatusChangeMsg. Also subscribes to presence_change events for the self
