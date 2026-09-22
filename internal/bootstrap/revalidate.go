@@ -413,7 +413,7 @@ func conditionalVersions(ids []string, cached map[string]int64) map[string]int64
 // nothing about who is on the other end — so a bot DM revalidates to
 // "dm". That is recoverable rather than lost: connectWorkspace
 // re-derives "app" from the cached users' is_bot on every boot
-// (main.go:1941), so the column is corrected before it is rendered.
+// (in cmd/slk), so the column is corrected before it is rendered.
 func channelType(ch edge.Channel) string {
 	switch {
 	case ch.IsIM:
