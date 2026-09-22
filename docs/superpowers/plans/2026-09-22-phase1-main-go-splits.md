@@ -1358,7 +1358,7 @@ git commit -m "refactor(cmd/slk): move the RTM handler type and message events t
 
 Expected: `moved 6 decls (24255 bytes) cmd/slk/main.go -> cmd/slk/connect.go`
 
-- [ ] **Step 2: Correct the stale comment**
+- [ ] **Step 2: Correct the first stale comment**
 
 In `cmd/slk/bootstrap_adapters_test.go`, find:
 
@@ -1376,27 +1376,56 @@ Replace with:
 
 The file reference is redundant: `connectWorkspace` is already named three lines above, and naming it is what stays true when the file changes.
 
-- [ ] **Step 3: Verify the tree**
+- [ ] **Step 3: Correct the second stale comment**
 
-```bash
-go build ./... && go vet ./cmd/slk/ && gofmt -l cmd/slk/ && go test ./cmd/slk/
+> Added during execution. The plan's original sweep missed this site because it
+> grepped for the moving symbol and the string `main.go` on the same line, and
+> this citation wraps. See the correction note in §7 of the spec.
+
+In `internal/bootstrap/revalidate.go`, find:
+
+```go
+// "dm". That is recoverable rather than lost: connectWorkspace
+// re-derives "app" from the cached users' is_bot on every boot
+// (main.go:1941), so the column is corrected before it is rendered.
 ```
 
-Expected: clean; `ok github.com/gammons/slk/cmd/slk`.
+Replace the third line so the citation names the package rather than a file and
+a line number that is already wrong:
 
-- [ ] **Step 4: Verify the size**
+```go
+// "dm". That is recoverable rather than lost: connectWorkspace
+// re-derives "app" from the cached users' is_bot on every boot
+// (in cmd/slk), so the column is corrected before it is rendered.
+```
+
+- [ ] **Step 4: Verify the tree**
+
+```bash
+go build ./... && go vet ./cmd/slk/ && gofmt -l cmd/slk/ internal/bootstrap/ && go test ./cmd/slk/ ./internal/bootstrap/
+```
+
+Expected: clean; `ok` for both packages.
+
+- [ ] **Step 5: Verify the size and the comment diff**
 
 ```bash
 wc -l cmd/slk/main.go cmd/slk/connect.go
+git diff --stat internal/bootstrap/
 ```
 
-Expected: `2272 cmd/slk/main.go` and `576 cmd/slk/connect.go`.
+Expected: `2272 cmd/slk/main.go`, `576 cmd/slk/connect.go`; and
+`1 file changed, 1 insertion(+), 1 deletion(-)`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add cmd/slk/main.go cmd/slk/connect.go cmd/slk/bootstrap_adapters_test.go
-git commit -m "refactor(cmd/slk): move workspace connect and reconnect lifecycle to connect.go"
+git add cmd/slk/main.go cmd/slk/connect.go cmd/slk/bootstrap_adapters_test.go internal/bootstrap/revalidate.go
+git commit -m "refactor(cmd/slk): move workspace connect and reconnect lifecycle to connect.go
+
+Also retires two comment citations that named connectWorkspace by file —
+one in cmd/slk, one in internal/bootstrap — replacing them with the
+package name so they survive Phase 2 moving things again."
 ```
 
 ---
@@ -1711,7 +1740,7 @@ Expected: build and vet silent; gofmt clean; all packages `ok`, 57 of them, zero
 git diff --stat main...HEAD -- . ':(exclude)cmd/slk' ':(exclude)docs'
 ```
 
-Expected: exactly four files — `internal/bootstrap/revalidate.go`, `internal/bootstrap/revalidate_test.go`, `internal/ui/reducer_focus_test.go`, `internal/ui/reducer_workspace.go` — totalling `4 files changed, 5 insertions(+), 5 deletions(-)`, all comment text. (`revalidate.go` carries two of the five edits.)
+Expected: exactly four files — `internal/bootstrap/revalidate.go`, `internal/bootstrap/revalidate_test.go`, `internal/ui/reducer_focus_test.go`, `internal/ui/reducer_workspace.go` — totalling `4 files changed, 7 insertions(+), 7 deletions(-)`, all comment text. (`revalidate.go` carries three of the seven edits and `revalidate_test.go` two.)
 
 ```bash
 git diff main...HEAD --stat -- cmd/slk | tail -1
@@ -1786,17 +1815,18 @@ Task 12, 14, 16 and 17 fixed the six comments Phase 1 *invalidated*. The sweep t
 
 **Files:** none — this is a GitHub issue.
 
-- [ ] **Step 1: Verify the four claims still hold**
+- [ ] **Step 1: Verify the three claims still hold**
 
 ```bash
 cd /path/to/slk && git checkout main
 grep -n 'refreshChannel' internal/ui/msgs.go internal/ui/reducer_focus_test.go
 grep -rn 'func.*refreshChannel' cmd/slk/    # expect: no output
-sed -n '1941p;2076p' cmd/slk/main.go
-grep -n 'main.go:1941' internal/bootstrap/revalidate.go
+sed -n '2076p' cmd/slk/main.go
 ```
 
-Expected: two comments referencing `rtmEventHandler.refreshChannel`; no such function anywhere in `cmd/slk`; line 1941 is a comment about `ThreadsListDirtyMsg` and 2076 a `context.WithTimeout` call, neither matching what cites them.
+Expected: two comments referencing `rtmEventHandler.refreshChannel`; no such function anywhere in `cmd/slk`; line 2076 is a `context.WithTimeout` call, not the handler struct literal that cites it.
+
+Note: this list was four sites when the plan was written. `internal/bootstrap/revalidate.go:416` moved out of it during execution — it names `connectWorkspace`, which Phase 1 moves, so Task 17 retires it rather than leaving it for this issue.
 
 - [ ] **Step 2: File the issue**
 
@@ -1808,7 +1838,6 @@ Body must cover:
 |---|---|---|
 | `internal/ui/msgs.go:76` | `rtmEventHandler.refreshChannel` | no such symbol anywhere in the repo |
 | `internal/ui/reducer_focus_test.go:885` | `rtmEventHandler.refreshChannel` | no such symbol anywhere in the repo |
-| `internal/bootstrap/revalidate.go:416` | `main.go:1941` | a comment about `ThreadsListDirtyMsg` |
 | `cmd/slk/main.go:4447` | `main.go:2076` | a `context.WithTimeout` call |
 
 Plus:
@@ -1821,8 +1850,8 @@ Plus:
   citation into another file rots silently and is worthless within weeks. Every
   one in this repository is wrong. Cite the symbol; the compiler and `grep` will
   keep that honest.
-- A note that Phase 1 retired three further `main.go:NNNN` citations as a side
-  effect of making them file-agnostic, so the four above are all that remain.
+- A note that Phase 1 retired five further `main.go:NNNN` citations as a side
+  effect of making them file-agnostic, so the three above are all that remain.
 
 - [ ] **Step 3: Cross-reference**
 

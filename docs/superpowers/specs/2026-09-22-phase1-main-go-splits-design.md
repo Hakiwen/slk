@@ -51,7 +51,7 @@ Both are amended in the tracking document in the same commit as this spec.
   They live inside `run()`, which does not move. PR #147 is fixing one of them
   independently and this work must not race it.
 - Any signature change, including Phase 2 step 8's history-fetch interface.
-- Any code change outside `cmd/slk`. The only external edits are five
+- Any code change outside `cmd/slk`. The only external edits are seven
   one-line comment corrections across four files (§7).
 - The pre-existing comment rot §7 uncovered. Recorded and filed, not fixed
   here — tracking-document ground rule 2.
@@ -357,18 +357,37 @@ Verification is therefore:
 
 ### Comments this change invalidates
 
-Six comments pair a moving symbol with the filename `main.go` and become wrong
+Eight comments pair a moving symbol with the filename `main.go` and become wrong
 the moment it moves. They are corrected in the commit that performs the
 corresponding move:
 
 | Site | Names | Moves to |
 |---|---|---|
 | `cmd/slk/bootstrap_adapters_test.go:848-852` | `connectWorkspace` | `connect.go` |
+| `internal/bootstrap/revalidate.go:416` | `connectWorkspace` | `connect.go` |
 | `internal/ui/reducer_focus_test.go:673` | `OnChannelMarked` | `markread.go` |
 | `internal/ui/reducer_workspace.go:86` | `rtmEventHandler` | `rtm_handler.go` |
 | `internal/bootstrap/revalidate.go:431` | `resolveUser` | `users.go` |
 | `internal/bootstrap/revalidate.go:449` | `resolveUser` | `users.go` |
+| `internal/bootstrap/revalidate_test.go:727` | `resolveUser` | `users.go` |
 | `internal/bootstrap/revalidate_test.go:757` | `resolveUser` | `users.go` |
+
+> **Correction, made during execution.** This table originally listed six sites.
+> Two were missed because the sweep that produced it grepped for the moving
+> symbol and the string `main.go` on the *same* line, and both of those
+> citations wrap across two comment lines —
+> `…resolveUser already uses this exact` / `chain (main.go:2432).` The Task 12
+> implementer found the first; re-sweeping over whole comment blocks rather
+> than single lines found the second, which this document had previously
+> misfiled as pre-existing rot because only its dead line number was noticed,
+> not that it also names a moving symbol.
+>
+> One site that *looks* like a ninth is not: `internal/ui/reducer_channels.go:363`
+> says "via `main.go`'s recorder closure", and that closure is inside `run()`,
+> which does not move. It stays correct and is left alone.
+>
+> The lesson generalises beyond this document: **grep line-by-line for a fact
+> that spans lines and you will under-count it.** Sweep the block.
 
 **The fix is to make them file-agnostic, not to re-point them.** A comment
 saying "`resolveUser` in `cmd/slk`" is correct today, correct after Phase 1, and
@@ -377,7 +396,7 @@ merely resets the rot clock. This is not a new convention:
 `internal/ui/reducer_workspace.go:78` already reads "cmd/slk's
 `rtmEventHandler`" — eight lines above one of the sites being fixed.
 
-Five files carry these six edits; four of them are outside `cmd/slk`. The exit
+Five files carry these eight edits; four of them are outside `cmd/slk`. The exit
 criteria in §8 are stated accordingly.
 
 ### Pre-existing rot — recorded, not fixed
@@ -390,18 +409,19 @@ does not exist:
 |---|---|---|---|
 | `internal/ui/msgs.go:76` | `rtmEventHandler.refreshChannel` | no such symbol anywhere | issue |
 | `internal/ui/reducer_focus_test.go:885` | `rtmEventHandler.refreshChannel` | no such symbol anywhere | issue |
-| `internal/bootstrap/revalidate.go:416` | `main.go:1941` | a comment about `ThreadsListDirtyMsg` | issue |
 | `cmd/slk/main.go:4447` | `main.go:2076` | a `context.WithTimeout` call | issue |
+| `internal/bootstrap/revalidate.go:416` | `main.go:1941` | a comment about `ThreadsListDirtyMsg` | fixed in §7 above |
 | `internal/bootstrap/revalidate.go:431` | `main.go:2432` | a comment about issue #111 | fixed in §7 above |
 | `internal/bootstrap/revalidate.go:449` | `main.go:2440` | a bare `return` | fixed in §7 above |
+| `internal/bootstrap/revalidate_test.go:727` | `main.go:2432` | a comment about issue #111 | fixed in §7 above |
 | `internal/bootstrap/revalidate_test.go:757` | `main.go:2440` | a bare `return` | fixed in §7 above |
 
-The last three appear in both tables because there the filename and the dead
+The last five appear in both tables because there the filename and the dead
 line number are a single token — `(main.go:2432)`. Replacing it with a
 file-agnostic reference necessarily retires the line number too. That is a
 side effect of the §7 fix, not extra scope.
 
-The remaining four are **filed as one issue, not fixed here**. Repairing the
+The remaining three are **filed as one issue, not fixed here**. Repairing the
 `refreshChannel` references requires deciding what they *should* say, which is a
 judgement about current behaviour rather than code motion — ground rule 2. Note
 also that Phase 1 makes `main.go:4447`'s dead citation *differently* dead, since
@@ -426,7 +446,7 @@ another file rots silently and is worthless within weeks. Cite the symbol.**
 | New test files | exactly 1 (`main_scope_test.go`) |
 | Non-comment changes outside `cmd/slk` | **0** |
 | Files touched outside `cmd/slk` | 4, comment-only: `internal/ui/reducer_focus_test.go`, `internal/ui/reducer_workspace.go`, `internal/bootstrap/revalidate.go`, `internal/bootstrap/revalidate_test.go` |
-| Issue filed for pre-existing comment rot | 1, covering 4 sites (§7) |
+| Issue filed for pre-existing comment rot | 1, covering 3 sites (§7) |
 | `go test ./... -race` | green |
 | `go vet ./...`, `golangci-lint run`, `gofmt -l .` | clean |
 | Every commit | builds, `go test ./cmd/slk/` green |
@@ -441,7 +461,7 @@ another file rots silently and is worthless within weeks. Cite the symbol.**
 | Six PRs conflict | §6 rebase recipe with generated symbol table; accepted cost, decided deliberately |
 | A grouping decision proves wrong later | Moving a declaration between files in one package is a one-commit, zero-risk change. Not worth optimising for now. |
 | `main.go` regrows | §4 guard |
-| Comments silently go stale | §7 fixes the six this change invalidates, and fixes them file-agnostically so they do not rot again |
+| Comments silently go stale | §7 fixes the eight this change invalidates, and fixes them file-agnostically so they do not rot again |
 | Merge conflicts *with* #236 | Near-none — disjoint code. Of the four externally-touched files, two are in `internal/ui` (`reducer_focus_test.go`, `reducer_workspace.go`); both edits are one line of comment text, trivially resolvable in either direction. See the RFC section above. |
 
 ---
