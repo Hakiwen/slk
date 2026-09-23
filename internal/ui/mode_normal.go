@@ -169,6 +169,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		a.FocusNext()
 
 	case key.Matches(msg, a.keys.Enter):
+		if cmd, ok := a.openForwardedSelected(); ok {
+			return cmd
+		}
 		return a.handleEnter()
 
 	case key.Matches(msg, a.keys.ToggleSection):
@@ -262,6 +265,9 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 
 	case key.Matches(msg, a.keys.CopyPermalink):
 		return a.copyPermalinkOfSelected()
+
+	case key.Matches(msg, a.keys.ForwardMessage):
+		return a.beginForwardOfSelected()
 
 	case key.Matches(msg, a.keys.Edit):
 		return a.beginEditOfSelected()

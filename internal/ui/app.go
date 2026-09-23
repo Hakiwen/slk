@@ -119,6 +119,7 @@ type App struct {
 	compose          compose.Model
 	statusbar        statusbar.Model
 	channelFinder    channelfinder.Model
+	pendingForward   *forwardSource
 	searchResults    searchresults.Model
 	newMessagePicker newmessagepicker.Model
 	workspaceFinder  workspacefinder.Model
@@ -1878,6 +1879,12 @@ func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS s
 }
 
 func (a *App) SetMode(mode Mode) {
+	// Global interrupts and workspace switches must abandon an unsubmitted
+	// forward, just like Esc, rather than leave a stale source armed.
+	if mode != ModeChannelFinder && a.pendingForward != nil {
+		a.pendingForward = nil
+		a.channelFinder.Close()
+	}
 	// A mode change always disarms a pending ctrl+w chord — a global
 	// intercept (e.g. ctrl+c quit-confirm) must not strand it armed.
 	// The `if` guard scopes the hint restore to chord disarms only, so
@@ -2382,7 +2389,7 @@ func (a *App) clearActiveSearch() {
 }
 
 // SetMessageService wires the App's MessageService collaborator
-// (send / edit / delete / mark-unread / permalink). Build one via
+// (send / forward / edit / delete / mark-unread / permalink). Build one via
 // NewMessageService from a MessageServiceFuncs bundle.
 func (a *App) SetMessageService(s core.MessageService) {
 	if s == nil {
