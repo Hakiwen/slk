@@ -135,10 +135,13 @@ type App struct {
 	focusedPanel   Panel
 	sidebarVisible bool
 	threadVisible  bool
-	view           View
-	width          int
-	height         int
-	keys           KeyMap
+	// stackFront is the content pane (PanelMessages or PanelThread)
+	// that last had focus. Recorded by Update, read by threadInFront.
+	stackFront Panel
+	view       View
+	width      int
+	height     int
+	keys       KeyMap
 
 	// cmdline accumulates the text typed at the vi-style ':' prompt
 	// while in ModeCommand. Owned by mode_command.go; always "" in
@@ -847,7 +850,45 @@ func (a *App) Init() tea.Cmd {
 	return nil
 }
 
+// Update is the bubbletea entry point: the reducer chain in update,
+// then one piece of bookkeeping that must see the result of every
+// message — which content pane last had focus (see threadInFront).
+// Recorded here once rather than at the ~30 sites that set
+// focusedPanel.
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, cmd := a.update(msg)
+	if a.focusedPanel == PanelMessages || a.focusedPanel == PanelThread {
+		a.stackFront = a.focusedPanel
+	}
+	return m, cmd
+}
+
+// threadInFront reports whether the thread is the pane drawn when the
+// layout is too narrow for both (panelLayout.Compute). Focus decides;
+// with focus elsewhere (the sidebar), the content pane that last had
+// focus stays in front.
+func (a *App) threadInFront() bool {
+	if !a.threadVisible {
+		return false
+	}
+	switch a.focusedPanel {
+	case PanelThread:
+		return true
+	case PanelMessages:
+		return false
+	}
+	return a.stackFront == PanelThread
+}
+
+// computeFrame resolves this frame's layout from the App's state and
+// stores the hit-test bands. The one place View's layout inputs are
+// assembled; tests call it instead of repeating Compute's arguments.
+func (a *App) computeFrame() panelLayoutFrame {
+	return a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
+		a.sidebarVisible, a.threadVisible, a.threadInFront())
+}
+
+func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	// Phase 4 reducer chain (extension point — see internal/ui/reducers.go).
@@ -3114,16 +3155,10 @@ func (a *App) View() tea.View {
 	}
 
 	// Resolve per-pane widths/borders. Compute stores horizontal bands
-	// for subsequent mouse hit-testing (panelAt) and surfaces a
-	// ThreadAutoHidden flag when the available width can't fit the
-	// thread pane at its minimum.
-	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
-	if frame.ThreadAutoHidden {
-		a.threadVisible = false
-		if a.focusedPanel == PanelThread {
-			a.focusedPanel = PanelMessages
-		}
-	}
+	// for subsequent mouse hit-testing (panelAt). When the thread and
+	// channel stack, the pane behind has zero width and is not drawn.
+	// View reads App state here; it never writes it.
+	frame := a.computeFrame()
 	themeVer := styles.Version()
 
 	// If the full-screen image preview is open, the messages and
@@ -3139,8 +3174,10 @@ func (a *App) View() tea.View {
 	if a.sidebarVisible {
 		panels = append(panels, a.renderSidebar(frame.SidebarWidth, frame.SidebarBorder, frame.ContentHeight, themeVer))
 	}
-	if s := a.renderWindowsRegion(frame, themeVer, previewActive); s != "" {
-		panels = append(panels, s)
+	if frame.MsgWidth > 0 {
+		if s := a.renderWindowsRegion(frame, themeVer, previewActive); s != "" {
+			panels = append(panels, s)
+		}
 	}
 	if a.threadVisible && frame.ThreadWidth > 0 && !previewActive {
 		panels = append(panels, a.renderThreadRegion(frame, themeVer))
@@ -3228,7 +3265,7 @@ func (a *App) collectSixelPlacements(frame panelLayoutFrame) []imgpkg.SixelPlace
 		}
 		return want
 	}
-	if a.view != ViewChannels {
+	if a.view != ViewChannels || frame.MsgWidth == 0 {
 		return nil
 	}
 	// The same bounds renderWindowsRegion uses, so leaf rectangles
