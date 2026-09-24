@@ -44,14 +44,19 @@ See [[Terminal Compatibility|Terminal-Compatibility]] for which protocol your te
 
 ## Threads
 
-- Side panel (35% width), opened with `Enter`, toggled with `Ctrl+]`
+- Opens beside the channel (at least 80 columns wide) with `Enter`, toggled
+  with `Ctrl+]`. On terminals too narrow to fit both panes, the thread and
+  channel stack instead: only one is shown at a time, and focus decides which
+  — `Tab` / `Shift+Tab` switch between them, `Esc` or `q` closes the thread.
+  The header is a breadcrumb naming the channel, the thread's author, and the
+  reply count (e.g. `# general › Thread from alice · 2 replies`).
 - Live thread reply routing, real-time updates
 - Also send to channel: `Ctrl+O` while composing a thread reply toggles Slack's
   "Also send to #channel" broadcast (`reply_broadcast=true`), and `Alt+Enter`
   sends with broadcast in a single keystroke. An accent-colored
   `↪ also send to #channel` line under the input shows when it's armed; the
   toggle is non-sticky (cleared after send or when opening another thread).
-- Auto-closes on channel switch or narrow terminals
+- Closes on channel switch
 - **Threads view** (`⚑ Threads` at top of sidebar): scrollable list of every
   thread you authored, replied to, or were @-mentioned in for the active
   workspace. Unread first, then newest activity. Selecting a thread opens

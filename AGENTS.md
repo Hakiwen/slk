@@ -65,7 +65,11 @@ that no longer exists. Do not trust it.** Current structural documentation:
   `os/exec`; `slack-go` only in `blockkit`, as the data it renders. `internal/ui/boundary_test.go`
   enforces this. The boundary is deliberate; do not breach it.
 - **`App.Update` routes through a reducer chain**, not a switch. Add behavior by
-  adding to a `reducer_*.go` file, not by extending `Update`.
+  adding to a `reducer_*.go` file, not by extending `Update`. The only step
+  outside the chain is the thin `Update` wrapper that records `stackFront`
+  (which content pane — messages or thread — last had focus, for the stacked
+  thread layout) after every message; do not add other post-chain logic
+  there.
 - **Per-mode key handling is a table**, `modeHandlers` in
   `internal/ui/mode_handlers.go`. One `mode_*.go` file per mode.
 - **SQLite is a cache.** Slack remains authoritative.

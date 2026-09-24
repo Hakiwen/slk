@@ -44,6 +44,7 @@ func TestRenderBreadcrumb(t *testing.T) {
 		{"private glyph", 60, "design", "private", "alice", 2, hinted("◆ design › Thread from alice · 2 replies", 60)},
 		{"dm glyph", 60, "bob", "dm", "alice", 2, hinted("● bob › Thread from alice · 2 replies", 60)},
 		{"group dm glyph", 60, "bob, carol", "group_dm", "alice", 2, hinted("● bob, carol › Thread from alice · 2 replies", 60)},
+		{"emoji in author name", 60, "general", "channel", "al🎉ice", 2, hinted("# general › Thread from al🎉ice · 2 replies", 60)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

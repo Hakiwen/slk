@@ -7,6 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	emojiutil "github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/styles"
 )
@@ -49,19 +50,19 @@ func renderBreadcrumb(width int, channelName, channelType, author string, replyC
 		from = " from " + author
 	}
 	leftWidth := func() int {
-		w := ansi.StringWidth(thread + from + count)
+		w := emojiutil.Width(thread + from + count)
 		if channel != "" {
-			w += ansi.StringWidth(channel + sep)
+			w += emojiutil.Width(channel + sep)
 		}
 		return w
 	}
 
-	showHint := leftWidth()+breadcrumbHintGap+ansi.StringWidth(breadcrumbHint) <= width
+	showHint := leftWidth()+breadcrumbHintGap+emojiutil.Width(breadcrumbHint) <= width
 	if leftWidth() > width {
 		from = ""
 	}
 	if channel != "" && leftWidth() > width {
-		room := width - ansi.StringWidth(sep+thread+count)
+		room := width - emojiutil.Width(sep+thread+count)
 		if room < 2 {
 			channel = ""
 		} else {
@@ -77,12 +78,15 @@ func renderBreadcrumb(width int, channelName, channelType, author string, replyC
 	b.WriteString(bg.Foreground(styles.Accent).Bold(true).Render(thread + from))
 	b.WriteString(bg.Foreground(styles.TextPrimary).Render(count))
 	left := b.String()
-	if ansi.StringWidth(left) > width {
+	// left carries ANSI styling from Render above; emojiutil.Width
+	// strips escapes before measuring (like ansi.StringWidth), so it
+	// is safe to measure directly here.
+	if emojiutil.Width(left) > width {
 		left = ansi.Truncate(left, width, "")
 	}
-	used := ansi.StringWidth(left)
+	used := emojiutil.Width(left)
 	if showHint {
-		gap := width - used - ansi.StringWidth(breadcrumbHint)
+		gap := width - used - emojiutil.Width(breadcrumbHint)
 		return left + bg.Render(strings.Repeat(" ", gap)) +
 			bg.Foreground(styles.TextMuted).Render(breadcrumbHint)
 	}

@@ -69,7 +69,7 @@ rail, the sidebar (and its border), and both panes' 2-column borders.
 | Thread open, pane space < 120 | **Stacked.** One pane — whichever is in front — takes the whole content area; the other is not drawn. |
 
 Constants: `minMsgWidth = 40` (unchanged), `minThreadW` 30 → **80**. The
-existing `floorMsgW = 10` floor applies to whichever pane is drawn when
+existing `floorPaneW = 10` floor applies to whichever pane is drawn when
 stacked, so behaviour below the floor matches today's.
 
 Worked widths (sidebar shown; "width" is the pane's `ThreadWidth`/`MsgWidth`,
@@ -232,7 +232,7 @@ overlays draw over whichever pane is shown.
 - Sweep: widths 20–300 × sidebar shown/hidden × `threadFront`. Asserts no
   negative widths; exactly one content pane when stacked; `ThreadWidth ≥ 80`
   whenever side by side; bands contiguous and ending at the terminal width
-  whenever the drawn pane is above `floorMsgW`.
+  whenever the drawn pane is above `floorPaneW`.
 
 **App-level**, through the real `a.Update` chain, sized with `withWindowSize`:
 
