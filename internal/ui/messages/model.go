@@ -613,9 +613,10 @@ func (m *Model) SetChannelType(chType string) {
 	m.channelType = chType
 }
 
-// channelGlyph returns the prefix glyph to render before the channel
-// name in the header. Mirrors the sidebar's type-to-glyph mapping.
-func channelGlyph(chType string) string {
+// ChannelGlyph returns the prefix glyph for a channel type: "◆" for
+// "private", "●" for "dm" and "group_dm", "#" otherwise. Used by the
+// messages-pane header and the thread breadcrumb.
+func ChannelGlyph(chType string) string {
 	switch chType {
 	case "private":
 		return "\u25c6" // ◆
@@ -2923,7 +2924,7 @@ func (m *Model) viewInternal(height, width int, applySelection bool) string {
 			Foreground(styles.TextPrimary).
 			Bold(true).
 			Padding(0, 1)
-		header := headerStyle.Render(fmt.Sprintf("%s %s", channelGlyph(m.channelType), m.channelName))
+		header := headerStyle.Render(fmt.Sprintf("%s %s", ChannelGlyph(m.channelType), m.channelName))
 		if m.channelTopic != "" {
 			// Width(width) pads every wrapped topic line to the full pane
 			// width. This keeps the invariant that EVERY chrome line is

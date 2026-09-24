@@ -135,10 +135,13 @@ type App struct {
 	focusedPanel   Panel
 	sidebarVisible bool
 	threadVisible  bool
-	view           View
-	width          int
-	height         int
-	keys           KeyMap
+	// stackFront is the content pane (PanelMessages or PanelThread)
+	// that last had focus. Recorded by Update, read by threadInFront.
+	stackFront Panel
+	view       View
+	width      int
+	height     int
+	keys       KeyMap
 
 	// cmdline accumulates the text typed at the vi-style ':' prompt
 	// while in ModeCommand. Owned by mode_command.go; always "" in
@@ -847,7 +850,63 @@ func (a *App) Init() tea.Cmd {
 	return nil
 }
 
+// Update is the bubbletea entry point: the reducer chain in update,
+// then one piece of bookkeeping that must see the result of every
+// message — which content pane last had focus (see threadInFront).
+// Recorded here once rather than at the ~30 sites that set
+// focusedPanel.
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, cmd := a.update(msg)
+	if a.focusedPanel == PanelMessages || a.focusedPanel == PanelThread {
+		a.stackFront = a.focusedPanel
+	}
+	return m, cmd
+}
+
+// threadInFront reports whether the thread is the pane drawn when the
+// layout is too narrow for both (panelLayout.Compute). Focus decides;
+// with focus elsewhere (the sidebar), the content pane that last had
+// focus stays in front.
+func (a *App) threadInFront() bool {
+	if !a.threadVisible {
+		return false
+	}
+	switch a.focusedPanel {
+	case PanelThread:
+		return true
+	case PanelMessages:
+		return false
+	}
+	return a.stackFront == PanelThread
+}
+
+// threadDrawnAlone reports whether the thread is the only content pane
+// on screen this frame: threadVisible and the layout has stacked with
+// the thread in front, leaving the messages pane undrawn (MsgWidth ==
+// 0). Uses a scratch panelLayout (see windowBounds) so the query
+// doesn't disturb a.layout's stored hit-test bands. Handlers that must
+// route a keypress to whichever content pane the user can actually see
+// — even while focus is elsewhere, such as the sidebar — consult this
+// instead of threadVisible alone.
+func (a *App) threadDrawnAlone() bool {
+	if !a.threadVisible {
+		return false
+	}
+	var scratch panelLayout
+	frame := scratch.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
+		a.sidebarVisible, a.threadVisible, a.threadInFront())
+	return frame.MsgWidth == 0
+}
+
+// computeFrame resolves this frame's layout from the App's state and
+// stores the hit-test bands. The one place View's layout inputs are
+// assembled; tests call it instead of repeating Compute's arguments.
+func (a *App) computeFrame() panelLayoutFrame {
+	return a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
+		a.sidebarVisible, a.threadVisible, a.threadInFront())
+}
+
+func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	// Phase 4 reducer chain (extension point — see internal/ui/reducers.go).
@@ -1848,6 +1907,23 @@ func (a *App) threadComposeChannelName(channelID string) string {
 	return "channel"
 }
 
+// applyThreadBreadcrumb names the open thread's channel in the thread
+// header. The name is the one the thread compose placeholder shows.
+// channelType may be "" when the caller has none, in which case the
+// sidebar's entry for channelID supplies it; an unknown channel falls
+// back to the default "#" glyph.
+func (a *App) applyThreadBreadcrumb(channelID, channelType string) {
+	if channelType == "" {
+		for _, it := range a.sidebar.Items() {
+			if it.ID == channelID {
+				channelType = it.Type
+				break
+			}
+		}
+	}
+	a.threadPanel.SetBreadcrumb(a.threadComposeChannelName(channelID), channelType)
+}
+
 // openThreadPanel makes the thread panel visible for (channelID,
 // threadTS) with the given parent row, primes replies from the thread
 // cache, and returns a cmd that fetches authoritative replies. Shared
@@ -1859,6 +1935,7 @@ func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS s
 	a.focusedPanel = PanelThread
 	a.threadPanel.SetThread(parent, nil, channelID, threadTS)
 	a.threadCompose.SetChannel(a.threadComposeChannelName(channelID))
+	a.applyThreadBreadcrumb(channelID, "")
 	// A fresh thread must not inherit the previous thread's
 	// "also send to channel" toggle.
 	a.threadCompose.SetBroadcast(false)
@@ -1993,9 +2070,17 @@ func (a *App) FocusPrev() {
 
 func (a *App) ToggleSidebar() {
 	a.clearSelections()
+	// Must be read before the flip: threadDrawnAlone consults
+	// a.sidebarVisible, and the question is whether the thread was
+	// alone in front WITH the sidebar still shown.
+	wasThreadAlone := a.threadDrawnAlone()
 	a.sidebarVisible = !a.sidebarVisible
 	if !a.sidebarVisible && a.focusedPanel == PanelSidebar {
-		a.focusedPanel = PanelMessages
+		if wasThreadAlone {
+			a.focusedPanel = PanelThread
+		} else {
+			a.focusedPanel = PanelMessages
+		}
 	}
 }
 
@@ -2019,6 +2104,10 @@ func (a *App) CloseThread() {
 	if a.focusedPanel == PanelThread {
 		a.focusedPanel = PanelMessages
 	}
+	// Reset which content pane was "in front" so a later reopen that
+	// doesn't itself move focus (e.g. a WS-driven reactivation) can't
+	// come up in front from stale state left by this closed thread.
+	a.stackFront = PanelMessages
 }
 
 // openSelectedThreadCmd updates UI state for whichever row the threadsview
@@ -2056,6 +2145,7 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 	}
 	a.threadPanel.SetThread(parent, nil, sum.ChannelID, sum.ThreadTS)
 	a.threadCompose.SetChannel(a.threadComposeChannelName(sum.ChannelID))
+	a.applyThreadBreadcrumb(sum.ChannelID, sum.ChannelType)
 	// A fresh thread must not inherit the previous thread's
 	// "also send to channel" toggle.
 	a.threadCompose.SetBroadcast(false)
@@ -3095,16 +3185,10 @@ func (a *App) View() tea.View {
 	}
 
 	// Resolve per-pane widths/borders. Compute stores horizontal bands
-	// for subsequent mouse hit-testing (panelAt) and surfaces a
-	// ThreadAutoHidden flag when the available width can't fit the
-	// thread pane at its minimum.
-	frame := a.layout.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(), a.sidebarVisible, a.threadVisible)
-	if frame.ThreadAutoHidden {
-		a.threadVisible = false
-		if a.focusedPanel == PanelThread {
-			a.focusedPanel = PanelMessages
-		}
-	}
+	// for subsequent mouse hit-testing (panelAt). When the thread and
+	// channel stack, the pane behind has zero width and is not drawn.
+	// View reads App state here; it never writes it.
+	frame := a.computeFrame()
 	themeVer := styles.Version()
 
 	// If the full-screen image preview is open, the messages and
@@ -3120,8 +3204,10 @@ func (a *App) View() tea.View {
 	if a.sidebarVisible {
 		panels = append(panels, a.renderSidebar(frame.SidebarWidth, frame.SidebarBorder, frame.ContentHeight, themeVer))
 	}
-	if s := a.renderWindowsRegion(frame, themeVer, previewActive); s != "" {
-		panels = append(panels, s)
+	if frame.MsgWidth > 0 {
+		if s := a.renderWindowsRegion(frame, themeVer, previewActive); s != "" {
+			panels = append(panels, s)
+		}
 	}
 	if a.threadVisible && frame.ThreadWidth > 0 && !previewActive {
 		panels = append(panels, a.renderThreadRegion(frame, themeVer))
@@ -3209,7 +3295,7 @@ func (a *App) collectSixelPlacements(frame panelLayoutFrame) []imgpkg.SixelPlace
 		}
 		return want
 	}
-	if a.view != ViewChannels {
+	if a.view != ViewChannels || frame.MsgWidth == 0 {
 		return nil
 	}
 	// The same bounds renderWindowsRegion uses, so leaf rectangles

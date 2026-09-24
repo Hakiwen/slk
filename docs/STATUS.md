@@ -70,7 +70,9 @@ Last updated: 2026-05-03
 - [x] Block Kit & legacy attachment rendering -- bot messages render with structure (sections, fields, color stripes), with disabled controls visible and an "↗ open in Slack to interact" hint
 
 ### Threads
-- [x] Thread panel -- side panel (35% width) for viewing and replying to threads
+- [x] Thread panel -- opens beside the channel (at least 80 columns wide) for
+      viewing and replying to threads; on narrow terminals the thread and
+      channel stack, with focus deciding which is shown
 - [x] Enter on message opens thread, Escape closes
 - [x] Ctrl+] toggles thread panel
 - [x] Thread replies with green left-border selection
