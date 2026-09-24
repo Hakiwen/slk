@@ -22,11 +22,11 @@ require (
 	github.com/yuin/goldmark v1.7.13
 	golang.design/x/clipboard v0.7.1
 	golang.org/x/crypto v0.54.0
-	golang.org/x/image v0.39.0
-	golang.org/x/sync v0.22.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/image v0.46.0
+	golang.org/x/sync v0.23.0
+	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.45.0
-	golang.org/x/text v0.40.0
+	golang.org/x/text v0.42.0
 	modernc.org/sqlite v1.58.0
 	r00t2.io/gosecret v1.1.5
 )
