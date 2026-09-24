@@ -447,9 +447,12 @@ func lockstepHitColumns(hit func(col int) bool) []int {
 //     chrome hook must take the channel type, not a pre-formatted title.
 //     Height is 1 row without a topic (the fixture's case) and 1+wrapped
 //     topic height with one; ChromeHeight() is exported.
-//     thread renders fmt.Sprintf("Thread  %d %s", n, replyLabel) -- the
-//     label is pluralised, "reply" at n==1 (thread/model.go:1292-1301)
-//     -- plus a "-" rule (thread/model.go:1302-1306). Height is always
+//     thread renders a breadcrumb, renderBreadcrumb in
+//     thread/breadcrumb.go: "<glyph> <channel> › Thread from <author>
+//     · N replies" plus a right-aligned "esc close", fed by
+//     SetBreadcrumb(channelName, channelType) -- the TYPE, not a
+//     pre-formatted title, as the note above asks of a chrome hook. The
+//     label is pluralised, "reply" at n==1. Then a "-" rule. Height is always
 //     2 rows and chromeHeight stays unexported.
 //
 //  6. Reaction hit-test row frame. messages.HitTestReaction takes a
