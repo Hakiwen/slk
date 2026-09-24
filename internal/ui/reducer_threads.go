@@ -70,6 +70,35 @@ import (
 )
 
 var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
+	var linkNav *pendingLinkNav
+	if m, ok := msg.(permalinkThreadResultMsg); ok {
+		p := m.nav
+		if a.pendingLinkNav != p {
+			return nil, true
+		}
+		if p.teamID != a.activeTeamID || p.channelID != a.activeChannelID ||
+			!a.threadVisible || p.channelID != a.threadPanel.ChannelID() || p.threadTS != a.threadPanel.ThreadTS() {
+			a.pendingLinkNav = nil
+			return nil, true
+		}
+		p.loadsDone++
+		if p.loadsDone == m.loads {
+			// Count nil/failure results too, but allow cache to populate the
+			// panel if a failed fetch happened to arrive first.
+			defer func() { a.pendingLinkNav = nil }()
+		}
+		if !m.authoritative && p.fetchApplied {
+			return nil, true // late cache must not replace authoritative data
+		}
+		if replies, ok := m.result.(ThreadRepliesLoadedMsg); ok && m.authoritative && replies.Replies != nil {
+			p.fetchApplied = true
+		}
+		linkNav = p
+		msg = m.result
+		if msg == nil {
+			return nil, true
+		}
+	}
 	switch m := msg.(type) {
 	case ThreadMarkedRemoteMsg:
 		// Via the echo helper: this event is also how slk's own thread
@@ -143,6 +172,19 @@ var reduceThreads reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 			}
 		}
 		a.threadPanel.SetThread(parentMsg, m.Replies, channelID, m.ThreadTS)
+		if linkNav != nil {
+			if linkNav.messageTS == m.ThreadTS {
+				a.threadPanel.GoToTop()
+				a.threadPanel.MoveUp() // the parent precedes the first reply
+			} else {
+				for i, reply := range a.threadPanel.Replies() {
+					if reply.TS == linkNav.messageTS {
+						a.threadPanel.SelectByIndex(i)
+						break
+					}
+				}
+			}
+		}
 
 		// Mark the thread as read now that the user has actually
 		// seen the replies. Server-side: subscriptions.thread.mark

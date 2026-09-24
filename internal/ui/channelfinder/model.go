@@ -39,11 +39,12 @@ type Item = core.ChannelFinderItem
 
 // Model is the fuzzy channel finder overlay.
 type Model struct {
-	items    []Item
-	filtered []int // indices into items matching query
-	query    string
-	selected int // index into filtered
-	visible  bool
+	items      []Item
+	filtered   []int // indices into items matching query
+	query      string
+	selected   int // index into filtered
+	visible    bool
+	forwarding bool
 
 	// statuses holds each DM channel's custom status and DND, keyed by
 	// channel ID (see SetStatus). Pruned to the current item set on
@@ -64,6 +65,9 @@ func (m *Model) SetItems(items []Item) {
 	synth := m.extractSynthetic()
 	m.items = append(synth, items...)
 	m.pruneStatuses()
+	if m.visible && m.forwarding {
+		m.filter()
+	}
 }
 
 // pruneStatuses drops any status entry whose channel ID is no longer in
@@ -283,8 +287,20 @@ func (m *Model) ClickRow(termWidth, termHeight, localY int) bool {
 	return true
 }
 
-// Open shows the overlay and resets state.
+// Open shows the channel-switching overlay and resets state.
 func (m *Model) Open() {
+	m.open(false)
+}
+
+// OpenForForwarding shows the overlay with only joined, non-synthetic
+// destinations and resets the query and selection. The full item list is
+// preserved for the next Open; selections use the same ChannelResult API.
+func (m *Model) OpenForForwarding() {
+	m.open(true)
+}
+
+func (m *Model) open(forwarding bool) {
+	m.forwarding = forwarding
 	m.visible = true
 	m.query = ""
 	m.selected = 0
@@ -294,6 +310,7 @@ func (m *Model) Open() {
 // Close hides the overlay.
 func (m *Model) Close() {
 	m.visible = false
+	m.forwarding = false
 }
 
 // IsVisible returns whether the overlay is showing.
@@ -372,14 +389,23 @@ func (m *Model) HandleKey(keyStr string) *ChannelResult {
 //     c, s, p appear in order). Tighter matches with more word-boundary
 //     hits score higher.
 func (m *Model) filter() {
+	// Live updates can remove the selected forwarding destination.
+	defer func() {
+		if m.selected >= len(m.filtered) {
+			m.selected = max(0, len(m.filtered)-1)
+		}
+	}()
 	m.filtered = nil
 	q := text.Fold(m.query)
+	idxs := make([]int, 0, len(m.items))
+	for i, item := range m.items {
+		if m.forwarding && (!item.Joined || item.Synthetic) {
+			continue
+		}
+		idxs = append(idxs, i)
+	}
 
 	if q == "" {
-		idxs := make([]int, len(m.items))
-		for i := range m.items {
-			idxs[i] = i
-		}
 		sort.SliceStable(idxs, func(i, j int) bool {
 			return m.lessNoQuery(idxs[i], idxs[j])
 		})
@@ -394,8 +420,8 @@ func (m *Model) filter() {
 	}
 
 	var matches []match
-	for i, item := range m.items {
-		name := text.Fold(item.Name)
+	for _, i := range idxs {
+		name := text.Fold(m.items[i].Name)
 		switch {
 		case strings.HasPrefix(name, q):
 			matches = append(matches, match{idx: i, tier: 0})
@@ -558,11 +584,15 @@ func (m Model) renderBox(termWidth int) string {
 	bg := styles.Background
 
 	// Title
+	titleText := "Switch Channel"
+	if m.forwarding {
+		titleText = "Forward message to…"
+	}
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Background(bg).
 		Foreground(styles.Primary).
-		Render("Switch Channel")
+		Render(titleText)
 
 	// Query input with blue left border
 	var inputText string

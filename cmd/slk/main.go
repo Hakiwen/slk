@@ -568,9 +568,9 @@ func run() error {
 	var p *tea.Program
 	workspacesStore := newWorkspaceConfigStore(cfg)
 
-	// router holds the program-wide active workspace pointer. All
-	// wireCallbacks-registered callbacks read router.Active() at
-	// invocation time so they always see the current workspace.
+	// router holds the program-wide active workspace pointer.
+	// Most wireCallbacks-registered callbacks read router.Active() at
+	// invocation time; forwarding instead uses the captured team ID.
 	router := newWorkspaceRouter()
 
 	// Wire avatar rendering with a lazy-fetch path. AvatarFunc is
@@ -695,8 +695,8 @@ func run() error {
 		}()
 	}
 
-	// wireCallbacks installs all App callbacks once at startup. Each
-	// callback reads router.Active() at invocation time, so the
+	// wireCallbacks installs all App callbacks once at startup. Most
+	// callbacks read router.Active() at invocation time, so the
 	// effective workspace tracks the user's current Ctrl-N selection
 	// without any per-switch closure rebinding.
 	//
@@ -930,6 +930,18 @@ func run() error {
 		}))
 
 		app.SetMessageService(core.NewMessageService(core.MessageServiceFuncs{
+			Forward: func(ctx context.Context, teamID string, sourceChannelID ids.ChannelID, ts ids.MessageTS, destinationChannelID ids.ChannelID) (core.ForwardResult, error) {
+				// The user may have switched workspaces since starting the action.
+				wctx := router.ByID(teamID)
+				if wctx == nil || wctx.Client == nil {
+					return core.ForwardResult{}, fmt.Errorf("forwarding message: workspace %q is unavailable", teamID)
+				}
+				postedTS, permalink, err := wctx.Client.ForwardMessage(ctx, string(sourceChannelID), string(ts), string(destinationChannelID))
+				if err != nil {
+					return core.ForwardResult{}, err
+				}
+				return core.ForwardResult{TS: ids.MessageTS(postedTS), Text: permalink}, nil
+			},
 			Send: func(channelID ids.ChannelID, text string) core.Msg {
 				chIDStr := string(channelID)
 				wctx := router.Active()
