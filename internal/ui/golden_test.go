@@ -1431,6 +1431,10 @@ func goldenThreadApp(t *testing.T, w, h int) *App {
 	// The threadTS is read off the parent rather than written as a
 	// literal so it cannot drift from goldenTS.
 	a.threadPanel.SetThread(msgs[2], msgs[3:5], "C1", msgs[2].ThreadTS)
+	// The production helper, not a literal: the golden then pins how
+	// openThreadPanel names the channel ("general" via SetChannels'
+	// name map, "channel" type via the sidebar entry).
+	a.applyThreadBreadcrumb("C1", "")
 	a.threadVisible = true
 	return a
 }

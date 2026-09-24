@@ -1848,6 +1848,23 @@ func (a *App) threadComposeChannelName(channelID string) string {
 	return "channel"
 }
 
+// applyThreadBreadcrumb names the open thread's channel in the thread
+// header. The name is the one the thread compose placeholder shows.
+// channelType may be "" when the caller has none, in which case the
+// sidebar's entry for channelID supplies it; an unknown channel falls
+// back to the default "#" glyph.
+func (a *App) applyThreadBreadcrumb(channelID, channelType string) {
+	if channelType == "" {
+		for _, it := range a.sidebar.Items() {
+			if it.ID == channelID {
+				channelType = it.Type
+				break
+			}
+		}
+	}
+	a.threadPanel.SetBreadcrumb(a.threadComposeChannelName(channelID), channelType)
+}
+
 // openThreadPanel makes the thread panel visible for (channelID,
 // threadTS) with the given parent row, primes replies from the thread
 // cache, and returns a cmd that fetches authoritative replies. Shared
@@ -1859,6 +1876,7 @@ func (a *App) openThreadPanel(parent messages.MessageItem, channelID, threadTS s
 	a.focusedPanel = PanelThread
 	a.threadPanel.SetThread(parent, nil, channelID, threadTS)
 	a.threadCompose.SetChannel(a.threadComposeChannelName(channelID))
+	a.applyThreadBreadcrumb(channelID, "")
 	// A fresh thread must not inherit the previous thread's
 	// "also send to channel" toggle.
 	a.threadCompose.SetBroadcast(false)
@@ -2056,6 +2074,7 @@ func (a *App) openSelectedThreadCmd(debounce bool) tea.Cmd {
 	}
 	a.threadPanel.SetThread(parent, nil, sum.ChannelID, sum.ThreadTS)
 	a.threadCompose.SetChannel(a.threadComposeChannelName(sum.ChannelID))
+	a.applyThreadBreadcrumb(sum.ChannelID, sum.ChannelType)
 	// A fresh thread must not inherit the previous thread's
 	// "also send to channel" toggle.
 	a.threadCompose.SetBroadcast(false)
