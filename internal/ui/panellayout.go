@@ -63,7 +63,7 @@ type panelLayoutFrame struct {
 // Compute resolves the per-frame layout. Stores the resulting
 // horizontal bands so subsequent PanelAt calls reflect the new layout.
 //
-// Width algorithm (preserved verbatim from the prior in-View code):
+// Width algorithm:
 //   - rail consumes railWidth (caller supplies; comes from
 //     workspaceRail.Width()).
 //   - sidebar, when visible, consumes sidebarWidth + 2 cols of border.
@@ -71,7 +71,9 @@ type panelLayoutFrame struct {
 //     max(35% of (width - rail - sidebar), 80) plus 2 cols of border,
 //     capped so messages keeps 40. Without room, the panes stack and
 //     only the front one (threadFront) is drawn, across the whole area.
-//   - messages consumes whatever's left, with a floor of 10.
+//   - whichever pane is drawn — messages side by side, or whichever
+//     pane is in front when stacked — consumes whatever's left, with
+//     a floor of 10.
 //
 // Border bits are 2 cols on each non-rail pane (1 col left + 1 col
 // right rounded border).

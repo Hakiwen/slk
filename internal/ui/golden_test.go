@@ -2278,9 +2278,9 @@ func TestGoldenFilesAreWellFormed(t *testing.T) {
 //
 // It has already happened once in this file's history — thread_open at
 // 120 columns was byte-for-byte base, because the thread pane auto-hid
-// (the old auto-hide, since removed). A per-scenario assertion catches that only
-// if someone thought to write one for that scenario; this catches it for
-// every scenario, including ones added later.
+// (the old auto-hide, since removed). A per-scenario assertion catches
+// that only if someone thought to write one for that scenario; this
+// catches it for every scenario, including ones added later.
 func TestGolden_ScenariosArePairwiseDistinct(t *testing.T) {
 	rendered := map[string]string{}
 	for _, sc := range goldenScenarios() {

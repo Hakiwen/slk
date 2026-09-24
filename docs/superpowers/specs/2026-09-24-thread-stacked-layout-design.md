@@ -283,7 +283,9 @@ One PR from `feat/thread-stacked-layout`, in three milestones:
 1. Layout, `stackFront`, render changes, breadcrumb, removal of auto-hide —
    a runnable build. **Stop for a hands-on feel test before continuing.**
 2. `windowBounds` fix; mouse and window tests.
-3. Goldens, docs, full verification.
+3. Stale-reference sweep and full verification. (Goldens were re-blessed
+   in the task whose change moved them — Tasks 1–3 of the plan — so
+   every commit stays green.)
 
 The PR description closes #223 and #244, states that it supersedes #246 and
 #149, and credits mkozjak (the `Enter`-through-`Update` test pattern and the
