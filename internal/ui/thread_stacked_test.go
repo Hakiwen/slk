@@ -211,6 +211,59 @@ func TestStacked_InsertModeKeepsThreadInFront(t *testing.T) {
 	assertFront(t, a, false, true)
 }
 
+// Final review F1: `i` from the sidebar while the thread is drawn
+// alone (stacked, thread in front) must go to the thread compose, not
+// jump the channel back in front.
+func TestStacked_InsertFromSidebarGoesToThreadWhenAlone(t *testing.T) {
+	a := stackedApp(t, 120)
+	updateAndRender(t, a, keyCode(tea.KeyEnter))
+	updateAndRender(t, a, keyCode(tea.KeyTab)) // thread -> sidebar
+	if a.focusedPanel != PanelSidebar {
+		t.Fatalf("precondition: focus=%v, want PanelSidebar", a.focusedPanel)
+	}
+	updateAndRender(t, a, keyPress('i'))
+	if a.mode != ModeInsert || a.focusedPanel != PanelThread {
+		t.Fatalf("i: mode=%v focus=%v, want insert in the thread", a.mode, a.focusedPanel)
+	}
+	assertFront(t, a, false, true)
+}
+
+// Final review F1 (side by side, unchanged behavior): `i` from the
+// sidebar with both panes drawn still goes to the channel compose.
+func TestStacked_InsertFromSidebarSideBySideGoesToChannel(t *testing.T) {
+	a := stackedApp(t, 200)
+	updateAndRender(t, a, keyCode(tea.KeyEnter))
+	updateAndRender(t, a, keyCode(tea.KeyTab)) // thread -> sidebar
+	if a.focusedPanel != PanelSidebar {
+		t.Fatalf("precondition: focus=%v, want PanelSidebar", a.focusedPanel)
+	}
+	updateAndRender(t, a, keyPress('i'))
+	if a.focusedPanel != PanelMessages {
+		t.Fatalf("i: focus=%v, want PanelMessages (side-by-side unchanged)", a.focusedPanel)
+	}
+}
+
+// Final review F1b: hiding the sidebar while it is focused and the
+// thread is drawn alone must focus the thread, not force the channel
+// back in front.
+func TestStacked_ToggleSidebarHideKeepsLoneThreadInFront(t *testing.T) {
+	a := stackedApp(t, 120)
+	updateAndRender(t, a, keyCode(tea.KeyEnter))
+	updateAndRender(t, a, keyCode(tea.KeyTab)) // thread -> sidebar
+	if a.focusedPanel != PanelSidebar {
+		t.Fatalf("precondition: focus=%v, want PanelSidebar", a.focusedPanel)
+	}
+	a.ToggleSidebar()
+	_ = a.View()
+	if a.focusedPanel != PanelThread {
+		t.Fatalf("ToggleSidebar: focus=%v, want PanelThread", a.focusedPanel)
+	}
+	// At 120 with the sidebar hidden the panes are still stacked
+	// (< 130 needed for both), so the thread stays the lone pane
+	// drawn.
+	assertFront(t, a, false, true)
+}
+
 // Review focus 5.
 func TestStacked_TinyTerminalsRender(t *testing.T) {
 	for w := 30; w <= 60; w++ {

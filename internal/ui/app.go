@@ -880,6 +880,24 @@ func (a *App) threadInFront() bool {
 	return a.stackFront == PanelThread
 }
 
+// threadDrawnAlone reports whether the thread is the only content pane
+// on screen this frame: threadVisible and the layout has stacked with
+// the thread in front, leaving the messages pane undrawn (MsgWidth ==
+// 0). Uses a scratch panelLayout (see windowBounds) so the query
+// doesn't disturb a.layout's stored hit-test bands. Handlers that must
+// route a keypress to whichever content pane the user can actually see
+// — even while focus is elsewhere, such as the sidebar — consult this
+// instead of threadVisible alone.
+func (a *App) threadDrawnAlone() bool {
+	if !a.threadVisible {
+		return false
+	}
+	var scratch panelLayout
+	frame := scratch.Compute(a.width, a.height, a.workspaceRail.Width(), a.sidebar.Width(),
+		a.sidebarVisible, a.threadVisible, a.threadInFront())
+	return frame.MsgWidth == 0
+}
+
 // computeFrame resolves this frame's layout from the App's state and
 // stores the hit-test bands. The one place View's layout inputs are
 // assembled; tests call it instead of repeating Compute's arguments.
@@ -2052,9 +2070,17 @@ func (a *App) FocusPrev() {
 
 func (a *App) ToggleSidebar() {
 	a.clearSelections()
+	// Must be read before the flip: threadDrawnAlone consults
+	// a.sidebarVisible, and the question is whether the thread was
+	// alone in front WITH the sidebar still shown.
+	wasThreadAlone := a.threadDrawnAlone()
 	a.sidebarVisible = !a.sidebarVisible
 	if !a.sidebarVisible && a.focusedPanel == PanelSidebar {
-		a.focusedPanel = PanelMessages
+		if wasThreadAlone {
+			a.focusedPanel = PanelThread
+		} else {
+			a.focusedPanel = PanelMessages
+		}
 	}
 }
 
@@ -2078,6 +2104,10 @@ func (a *App) CloseThread() {
 	if a.focusedPanel == PanelThread {
 		a.focusedPanel = PanelMessages
 	}
+	// Reset which content pane was "in front" so a later reopen that
+	// doesn't itself move focus (e.g. a WS-driven reactivation) can't
+	// come up in front from stale state left by this closed thread.
+	a.stackFront = PanelMessages
 }
 
 // openSelectedThreadCmd updates UI state for whichever row the threadsview
